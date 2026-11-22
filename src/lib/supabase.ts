@@ -28,5 +28,12 @@ export function isLiveSupabaseUrl(url: string): boolean {
 // True only when a project-specific Supabase URL (e.g. https://<project-ref>.supabase.co) is configured
 export const isSupabaseConfigured = isLiveSupabaseUrl(SUPABASE_URL) && SUPABASE_ANON_KEY.length > 0;
 
-// Always initialize the Supabase client with configured env vars or default fallbacks
-export const supabase: SupabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+// Always initialize the Supabase client with persistent localStorage session handling
+export const supabase: SupabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: {
+    persistSession: true,
+    autoRefreshToken: true,
+    detectSessionInUrl: true,
+    storage: typeof window !== 'undefined' ? window.localStorage : undefined,
+  },
+});

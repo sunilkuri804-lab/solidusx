@@ -42,7 +42,41 @@ const QUICK_TEST_WALLETS = [
   { label: 'Treasury Wallet', address: '5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1' },
 ];
 
+const AUTH_TOKEN_STORAGE_KEY = 'solidusx_session_token_v1';
+const AUTH_PROFILE_STORAGE_KEY = 'solidusx_session_profile_v1';
+
+function savePersistedSession(token: string, profile: UserProfile): void {
+  try {
+    window.localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, token);
+    window.localStorage.setItem(AUTH_PROFILE_STORAGE_KEY, JSON.stringify(profile));
+  } catch {
+    // Ignore storage quota errors
+  }
+}
+
+function loadPersistedSession(): { token: string; profile: UserProfile | null } | null {
+  try {
+    const savedToken = window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
+    if (!savedToken) return null;
+    const rawProfile = window.localStorage.getItem(AUTH_PROFILE_STORAGE_KEY);
+    const parsedProfile = rawProfile ? (JSON.parse(rawProfile) as UserProfile) : null;
+    return { token: savedToken, profile: parsedProfile };
+  } catch {
+    return null;
+  }
+}
+
+function clearPersistedSession(): void {
+  try {
+    window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+    window.localStorage.removeItem(AUTH_PROFILE_STORAGE_KEY);
+  } catch {
+    // Ignore
+  }
+}
+
 export default function App() {
+  const [authInitializing, setAuthInitializing] = useState(true);
   const [token, setToken] = useState<string | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [activeTab, setActiveTab] = useState<AppTab>('analyzer');
@@ -86,48 +120,101 @@ export default function App() {
     };
   }, []);
 
-  // Sync live Supabase OAuth session if configured
+  // Keep persisted session cache in sync when tier or daily checks update
   useEffect(() => {
-    if (!isSupabaseConfigured || !supabase) return;
-    supabase.auth.getSession().then(async ({ data }) => {
-      const accessToken = data.session?.access_token;
-      if (accessToken) {
+    if (token && profile) {
+      savePersistedSession(token, profile);
+    }
+  }, [token, profile]);
+
+  // Check Supabase session and subscribe to auth state changes before rendering login screen
+  useEffect(() => {
+    let mounted = true;
+
+    const { data: sub } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (!mounted) return;
+      if (event === 'SIGNED_OUT') {
+        clearPersistedSession();
+        setToken(null);
+        setProfile(null);
+        setAuthInitializing(false);
+        return;
+      }
+
+      const accessToken = session?.access_token;
+      if (accessToken && isSupabaseConfigured) {
         try {
           const { profile: fetched } = await fetchProfile(accessToken);
+          if (!mounted) return;
+          savePersistedSession(accessToken, fetched);
           setToken(accessToken);
           setProfile(fetched);
         } catch {
-          // Session invalid or expired
+          // Non-blocking; restoreSession handles fallback
+        } finally {
+          if (mounted) setAuthInitializing(false);
         }
       }
     });
 
-    const { data: sub } = supabase.auth.onAuthStateChange(async (_event, session) => {
-      if (session?.access_token) {
-        try {
-          const { profile: fetched } = await fetchProfile(session.access_token);
-          setToken(session.access_token);
+    const restoreSession = async () => {
+      try {
+        const { data } = await supabase.auth.getSession();
+        const accessToken = data.session?.access_token;
+
+        if (accessToken && isSupabaseConfigured) {
+          const { profile: fetched } = await fetchProfile(accessToken);
+          if (!mounted) return;
+          savePersistedSession(accessToken, fetched);
+          setToken(accessToken);
           setProfile(fetched);
-        } catch {
-          // Ignore
+          return;
         }
+
+        const saved = loadPersistedSession();
+        if (saved?.token) {
+          try {
+            const { profile: fetched } = await fetchProfile(saved.token);
+            if (!mounted) return;
+            savePersistedSession(saved.token, fetched);
+            setToken(saved.token);
+            setProfile(fetched);
+          } catch (err) {
+            if (!mounted) return;
+            if (err instanceof ApiError && err.status === 401) {
+              clearPersistedSession();
+            } else if (saved.profile) {
+              setToken(saved.token);
+              setProfile(saved.profile);
+            }
+          }
+        }
+      } catch {
+        // Ignore session check failure and show login screen cleanly
+      } finally {
+        if (mounted) setAuthInitializing(false);
       }
-    });
+    };
+
+    void restoreSession();
+
     return () => {
+      mounted = false;
       sub.subscription.unsubscribe();
     };
   }, []);
 
   const handleAuthenticated = useCallback((newToken: string, newProfile: UserProfile) => {
+    savePersistedSession(newToken, newProfile);
     setToken(newToken);
     setProfile(newProfile);
     setActiveTab('analyzer');
+    setAuthInitializing(false);
   }, []);
 
   const handleSignOut = useCallback(async () => {
-    if (isSupabaseConfigured && supabase) {
-      await supabase.auth.signOut().catch(() => {});
-    }
+    clearPersistedSession();
+    await supabase.auth.signOut().catch(() => {});
     setToken(null);
     setProfile(null);
     setAnalysis(null);
@@ -138,9 +225,8 @@ export default function App() {
   const handleDeleteAccount = useCallback(async () => {
     if (!token) return;
     await deleteAccount(token);
-    if (isSupabaseConfigured && supabase) {
-      await supabase.auth.signOut().catch(() => {});
-    }
+    clearPersistedSession();
+    await supabase.auth.signOut().catch(() => {});
     setToken(null);
     setProfile(null);
     setAnalysis(null);
@@ -186,6 +272,20 @@ export default function App() {
     const res = await claimRewardedAdScan(token);
     setProfile(res.profile);
   };
+
+  if (authInitializing) {
+    return (
+      <div className="min-h-screen bg-[#0A0B0E] text-[#F3F4F6] flex flex-col items-center justify-center gap-3 px-4">
+        <div className="w-11 h-11 rounded-2xl bg-[#14F195]/15 border border-[#14F195]/30 flex items-center justify-center text-[#14F195] animate-pulse">
+          <Zap className="w-5 h-5 fill-[#14F195]" />
+        </div>
+        <div className="font-display text-base font-semibold text-white tracking-tight">
+          SolidusX AI
+        </div>
+        <div className="text-xs text-zinc-500">Checking session…</div>
+      </div>
+    );
+  }
 
   if (!token || !profile) {
     return (

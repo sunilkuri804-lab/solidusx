@@ -20,7 +20,6 @@ dotenv.config();
 
 const PORT = Number(process.env.PORT) || 3000;
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
-const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
 const HELIUS_API_KEY = (process.env.HELIUS_API_KEY || '').trim();
 const GEMINI_API_KEY = (process.env.GEMINI_API_KEY || '').trim();
 const SUPABASE_URL = (process.env.VITE_SUPABASE_URL || '').trim();
@@ -77,6 +76,7 @@ interface UsedPaymentRecord {
 interface StoreState {
   users: Record<string, StoredUser>; // keyed by lowercase email
   usedPaymentSignatures?: Record<string, UsedPaymentRecord>;
+  sessionSecret?: string;
 }
 
 function ensureStoreDir(): void {
@@ -97,6 +97,7 @@ function loadStore(): StoreState {
       return {
         users: parsed.users,
         usedPaymentSignatures: parsed.usedPaymentSignatures || {},
+        sessionSecret: typeof parsed.sessionSecret === 'string' ? parsed.sessionSecret : undefined,
       };
     }
   } catch {
@@ -113,6 +114,21 @@ function saveStore(state: StoreState): void {
 }
 
 let store: StoreState = loadStore();
+
+function resolveSessionSecret(): string {
+  const envSecret = (process.env.SESSION_SECRET || '').trim();
+  if (envSecret) return envSecret;
+  if (store.sessionSecret && store.sessionSecret.length >= 32) {
+    return store.sessionSecret;
+  }
+  const generated = crypto.randomBytes(32).toString('hex');
+  store.sessionSecret = generated;
+  saveStore(store);
+  return generated;
+}
+
+const SESSION_SECRET = resolveSessionSecret();
+const PERSISTENT_SESSION_TTL_MS = 365 * 24 * 60 * 60 * 1000;
 
 function todayUtc(): string {
   return new Date().toISOString().slice(0, 10);
@@ -1224,7 +1240,7 @@ async function startServer(): Promise<void> {
     const token = signSessionToken({
       userId: user.id,
       email: user.email,
-      exp: Date.now() + 7 * 24 * 60 * 60 * 1000,
+      exp: Date.now() + PERSISTENT_SESSION_TTL_MS,
     });
     res.status(201).json({ token, profile: toPublicProfile(user) });
   });
@@ -1254,7 +1270,7 @@ async function startServer(): Promise<void> {
     const token = signSessionToken({
       userId: user.id,
       email: user.email,
-      exp: Date.now() + 7 * 24 * 60 * 60 * 1000,
+      exp: Date.now() + PERSISTENT_SESSION_TTL_MS,
     });
     res.json({ token, profile: toPublicProfile(user) });
   });
