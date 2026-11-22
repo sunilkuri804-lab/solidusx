@@ -101,7 +101,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthenticated }) => {
             </div>
             <div>
               <div className="font-mono tabular-nums text-lg font-semibold text-white">4 Tools</div>
-              <div className="text-xs text-zinc-400 mt-0.5">Always-unlocked AI</div>
+              <div className="text-xs text-zinc-400 mt-0.5">Pro Gemini AI suite</div>
             </div>
             <div>
               <div className="font-mono tabular-nums text-lg font-semibold text-white">50 Tx</div>
@@ -239,8 +239,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthenticated }) => {
             </form>
 
             <p className="mt-5 text-[11px] text-zinc-500 text-center leading-relaxed">
-              Free accounts include 1 daily Solana wallet scan, all 4 AI tools unlocked, and
-              one-click account deletion in Settings.
+              Free accounts include 1 daily Solana wallet scan (plus up to 2 ad-unlocked scans per
+              day) and one-click account deletion in Settings.
             </p>
           </div>
         </div>

@@ -24,8 +24,11 @@ const HELIUS_API_KEY = (process.env.HELIUS_API_KEY || '').trim();
 const GEMINI_API_KEY = (process.env.GEMINI_API_KEY || '').trim();
 const SUPABASE_URL = (process.env.VITE_SUPABASE_URL || '').trim();
 const SUPABASE_ANON_KEY = (process.env.VITE_SUPABASE_ANON_KEY || '').trim();
+const SUPABASE_SERVICE_ROLE_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
 
+const MERCHANT_SOLANA_WALLET = '9XEcqn4CfftDGx3DJLdHgPc7KoF9YPUgeQvHaBztCEt2';
 const BASE58_REGEX = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+const SOLANA_SIGNATURE_REGEX = /^[1-9A-HJ-NP-Za-km-z]{64,90}$/;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const TEN_MINUTES_MS = 10 * 60 * 1000;
 
@@ -47,6 +50,8 @@ const KNOWN_TOKENS: Record<string, string> = {
 const DATA_DIR = path.resolve(process.cwd(), '.data');
 const STORE_FILE = path.join(DATA_DIR, 'solidusx-store.json');
 
+const MAX_FREE_AD_SCANS_PER_DAY = 2;
+
 interface StoredUser {
   id: string;
   email: string;
@@ -55,13 +60,22 @@ interface StoredUser {
   tier: SubscriptionTier;
   dailyChecks: number;
   bonusChecks: number;
+  adScansToday?: number;
   lastCheckDate: string;
   authProvider: 'email' | 'google' | 'supabase';
   createdAt: string;
 }
 
+interface UsedPaymentRecord {
+  userId: string;
+  tier: SubscriptionTier;
+  billing: 'monthly' | 'annual';
+  verifiedAt: string;
+}
+
 interface StoreState {
   users: Record<string, StoredUser>; // keyed by lowercase email
+  usedPaymentSignatures?: Record<string, UsedPaymentRecord>;
 }
 
 function ensureStoreDir(): void {
@@ -73,18 +87,21 @@ function ensureStoreDir(): void {
 function loadStore(): StoreState {
   ensureStoreDir();
   if (!fs.existsSync(STORE_FILE)) {
-    return { users: {} };
+    return { users: {}, usedPaymentSignatures: {} };
   }
   try {
     const raw = fs.readFileSync(STORE_FILE, 'utf-8');
     const parsed = JSON.parse(raw) as StoreState;
     if (parsed && typeof parsed === 'object' && parsed.users) {
-      return parsed;
+      return {
+        users: parsed.users,
+        usedPaymentSignatures: parsed.usedPaymentSignatures || {},
+      };
     }
   } catch {
     // Corrupted store resets cleanly
   }
-  return { users: {} };
+  return { users: {}, usedPaymentSignatures: {} };
 }
 
 function saveStore(state: StoreState): void {
@@ -111,6 +128,10 @@ function syncUserDailyReset(user: StoredUser): boolean {
   if (user.lastCheckDate !== today) {
     user.lastCheckDate = today;
     user.dailyChecks = 0;
+    user.adScansToday = 0;
+    if (user.tier === 'Free') {
+      user.bonusChecks = 0;
+    }
     return true;
   }
   return false;
@@ -124,6 +145,8 @@ function toPublicProfile(user: StoredUser): UserProfile {
     dailyChecks: user.dailyChecks,
     dailyLimit: getDailyLimit(user.tier),
     bonusChecks: user.bonusChecks,
+    adScansToday: user.adScansToday ?? 0,
+    maxAdScansPerDay: user.tier === 'Free' ? MAX_FREE_AD_SCANS_PER_DAY : 0,
     lastCheckDate: user.lastCheckDate,
     authProvider: user.authProvider,
     createdAt: user.createdAt,
@@ -220,6 +243,7 @@ async function resolveAuthenticatedUser(req: Request): Promise<StoredUser | null
               tier: 'Free',
               dailyChecks: 0,
               bonusChecks: 0,
+              adScansToday: 0,
               lastCheckDate: todayUtc(),
               authProvider: 'supabase',
               createdAt: new Date().toISOString(),
@@ -251,6 +275,17 @@ async function requireAuth(req: AuthenticatedRequest, res: Response, next: NextF
     return;
   }
   req.currentUser = user;
+  next();
+}
+
+function requirePaidAiTier(req: AuthenticatedRequest, res: Response, next: NextFunction): void {
+  if (!req.currentUser || req.currentUser.tier === 'Free') {
+    res.status(403).json({
+      error: 'PRO_REQUIRED',
+      message: 'All 4 AI tools require a Pro or Super subscription. Upgrade to unlock.',
+    });
+    return;
+  }
   next();
 }
 
@@ -414,13 +449,26 @@ async function fetchSol7DayHistory(): Promise<SolPriceHistory> {
     return { ...cachedSolHistory.data, source: 'cached' };
   }
   const now = Date.now();
+  // Smooth 14-point fallback curve anchored to live/fallback SOL spot price so sparkline renders cleanly
+  const relativeCurve = [-0.032, -0.025, -0.029, -0.018, -0.021, -0.011, -0.014, -0.004, 0.002, -0.006, 0.004, 0.009, 0.003, 0];
+  const fallbackPoints: SolPricePoint[] = relativeCurve.map((offset, idx) => {
+    const ts = now - (relativeCurve.length - 1 - idx) * 12 * 60 * 60 * 1000;
+    const price = Math.round(fallbackPrice * (1 + offset) * 100) / 100;
+    return {
+      timestamp: ts,
+      label: formatShortDateLabel(ts),
+      price,
+    };
+  });
+  const firstFallback = fallbackPoints[0].price;
+  const lastFallback = fallbackPoints[fallbackPoints.length - 1].price;
+  const fallbackChangePct =
+    firstFallback > 0 ? Math.round(((lastFallback - firstFallback) / firstFallback) * 1000) / 10 : 0;
+
   return {
-    currentPriceUsd: fallbackPrice,
-    change7dPct: 0,
-    points: Array.from({ length: 7 }, (_, i) => {
-      const ts = now - (6 - i) * 24 * 60 * 60 * 1000;
-      return { timestamp: ts, label: formatShortDateLabel(ts), price: fallbackPrice };
-    }),
+    currentPriceUsd: lastFallback,
+    change7dPct: fallbackChangePct,
+    points: fallbackPoints,
     source: 'cached',
   };
 }
@@ -489,6 +537,149 @@ async function fetchSolBalance(address: string): Promise<{ sol: number; rpcUsed:
     }
   }
   return { sol: 0, rpcUsed: endpoints[endpoints.length - 1] };
+}
+
+function getPlanUsdPrice(tier: 'Pro' | 'Super', billing: 'monthly' | 'annual'): number {
+  if (tier === 'Pro') return 19;
+  return billing === 'annual' ? 1099 : 89;
+}
+
+async function syncTierToSupabase(userId: string, tier: SubscriptionTier): Promise<boolean> {
+  if (!isLiveSupabaseConfigured() || !SUPABASE_SERVICE_ROLE_KEY) {
+    return false;
+  }
+  try {
+    const resp = await fetch(
+      `${SUPABASE_URL.replace(/\/$/, '')}/rest/v1/profiles?id=eq.${encodeURIComponent(userId)}`,
+      {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: SUPABASE_SERVICE_ROLE_KEY,
+          Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+          Prefer: 'return=minimal',
+        },
+        body: JSON.stringify({
+          tier,
+          updated_at: new Date().toISOString(),
+        }),
+        signal: AbortSignal.timeout(6000),
+      }
+    );
+    return resp.ok;
+  } catch {
+    return false;
+  }
+}
+
+interface VerifiedSolanaTxResult {
+  found: boolean;
+  succeeded: boolean;
+  solReceived: number;
+  stablecoinReceivedUsd: number;
+  rpcUsed: string;
+}
+
+async function verifySolanaPaymentOnRpc(signature: string): Promise<VerifiedSolanaTxResult> {
+  const endpoints = getRpcEndpoints();
+  let lastRpc = endpoints[0];
+
+  for (const endpoint of endpoints) {
+    lastRpc = endpoint;
+    try {
+      const tx = await rpcCall<{
+        meta?: {
+          err?: unknown;
+          preBalances?: number[];
+          postBalances?: number[];
+          preTokenBalances?: Array<{
+            owner?: string;
+            mint?: string;
+            uiTokenAmount?: { uiAmount?: number | null };
+          }>;
+          postTokenBalances?: Array<{
+            owner?: string;
+            mint?: string;
+            uiTokenAmount?: { uiAmount?: number | null };
+          }>;
+        };
+        transaction?: {
+          message?: {
+            accountKeys?: Array<string | { pubkey?: string }>;
+          };
+        };
+      } | null>(endpoint, 'getTransaction', [
+        signature,
+        { encoding: 'jsonParsed', commitment: 'confirmed', maxSupportedTransactionVersion: 0 },
+      ]);
+
+      if (!tx) {
+        continue;
+      }
+
+      if (tx.meta?.err !== null && tx.meta?.err !== undefined) {
+        return {
+          found: true,
+          succeeded: false,
+          solReceived: 0,
+          stablecoinReceivedUsd: 0,
+          rpcUsed: endpoint,
+        };
+      }
+
+      const accountKeys = (tx.transaction?.message?.accountKeys || []).map((k) =>
+        typeof k === 'string' ? k : k?.pubkey || ''
+      );
+      const merchantIdx = accountKeys.indexOf(MERCHANT_SOLANA_WALLET);
+      let solReceived = 0;
+      if (
+        merchantIdx >= 0 &&
+        tx.meta?.preBalances &&
+        tx.meta?.postBalances &&
+        typeof tx.meta.preBalances[merchantIdx] === 'number' &&
+        typeof tx.meta.postBalances[merchantIdx] === 'number'
+      ) {
+        const deltaLamports = tx.meta.postBalances[merchantIdx] - tx.meta.preBalances[merchantIdx];
+        solReceived = Math.max(0, deltaLamports / 1e9);
+      }
+
+      const STABLE_MINTS = new Set([
+        'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', // USDC
+        'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', // USDT
+      ]);
+      let preStable = 0;
+      let postStable = 0;
+      for (const bal of tx.meta?.preTokenBalances || []) {
+        if (bal.owner === MERCHANT_SOLANA_WALLET && bal.mint && STABLE_MINTS.has(bal.mint)) {
+          preStable += Number(bal.uiTokenAmount?.uiAmount || 0);
+        }
+      }
+      for (const bal of tx.meta?.postTokenBalances || []) {
+        if (bal.owner === MERCHANT_SOLANA_WALLET && bal.mint && STABLE_MINTS.has(bal.mint)) {
+          postStable += Number(bal.uiTokenAmount?.uiAmount || 0);
+        }
+      }
+      const stablecoinReceivedUsd = Math.max(0, postStable - preStable);
+
+      return {
+        found: true,
+        succeeded: true,
+        solReceived,
+        stablecoinReceivedUsd,
+        rpcUsed: endpoint,
+      };
+    } catch {
+      continue;
+    }
+  }
+
+  return {
+    found: false,
+    succeeded: false,
+    solReceived: 0,
+    stablecoinReceivedUsd: 0,
+    rpcUsed: lastRpc,
+  };
 }
 
 interface HeliusTx {
@@ -946,6 +1137,7 @@ async function startServer(): Promise<void> {
       tier: 'Free',
       dailyChecks: 0,
       bonusChecks: 0,
+      adScansToday: 0,
       lastCheckDate: todayUtc(),
       authProvider: 'email',
       createdAt: new Date().toISOString(),
@@ -1001,15 +1193,148 @@ async function startServer(): Promise<void> {
       res.status(400).json({ error: 'Invalid subscription tier.' });
       return;
     }
+    if (tier !== 'Free') {
+      res.status(402).json({
+        error: 'PAYMENT_REQUIRED',
+        message: 'Upgrading to Pro or Super requires a verified Solana transaction signature.',
+      });
+      return;
+    }
     const user = req.currentUser!;
-    user.tier = tier;
+    user.tier = 'Free';
     saveStore(store);
     res.json({ profile: toPublicProfile(user) });
   });
 
+  // --- DIRECT SOLANA CRYPTO PAYMENT QUOTE & HELIUS RPC VERIFICATION ---
+  app.get('/api/payments/quote', requireAuth, async (_req, res) => {
+    const solPriceUsd = await fetchSolPriceUsd();
+    const toSol = (usd: number) => Math.ceil((usd / solPriceUsd) * 10000) / 10000;
+    res.json({
+      merchantWallet: MERCHANT_SOLANA_WALLET,
+      solPriceUsd,
+      quotes: {
+        Pro: {
+          monthly: { usd: 19, sol: toSol(19) },
+        },
+        Super: {
+          monthly: { usd: 89, sol: toSol(89) },
+          annual: { usd: 1099, sol: toSol(1099) },
+        },
+      },
+    });
+  });
+
+  app.post('/api/payments/verify-solana', requireAuth, async (req: AuthenticatedRequest, res) => {
+    const user = req.currentUser!;
+    const rawSig = typeof req.body?.signature === 'string' ? req.body.signature.trim() : '';
+    const tier = req.body?.tier as SubscriptionTier;
+    const billing: 'monthly' | 'annual' = req.body?.billing === 'annual' ? 'annual' : 'monthly';
+
+    if (tier !== 'Pro' && tier !== 'Super') {
+      res.status(400).json({ error: 'Select Pro or Super plan to verify payment.' });
+      return;
+    }
+    if (!SOLANA_SIGNATURE_REGEX.test(rawSig)) {
+      res.status(400).json({
+        error: 'Invalid Solana transaction signature format. Please paste the full Base58 Tx Hash.',
+      });
+      return;
+    }
+
+    if (!store.usedPaymentSignatures) {
+      store.usedPaymentSignatures = {};
+    }
+    if (store.usedPaymentSignatures[rawSig]) {
+      res.status(409).json({
+        error: 'This Solana transaction signature has already been used to activate a plan.',
+      });
+      return;
+    }
+
+    try {
+      const [solPriceUsd, txResult] = await Promise.all([
+        fetchSolPriceUsd(),
+        verifySolanaPaymentOnRpc(rawSig),
+      ]);
+
+      if (!txResult.found) {
+        res.status(400).json({
+          error:
+            'Transaction not found on Solana mainnet RPC yet. Please wait a few seconds for confirmation and click Verify & Activate Plan again.',
+        });
+        return;
+      }
+
+      if (!txResult.succeeded) {
+        res.status(400).json({
+          error: 'This Solana transaction failed on-chain and cannot activate a subscription.',
+        });
+        return;
+      }
+
+      const expectedUsd = getPlanUsdPrice(tier, billing);
+      const expectedSol = Math.round((expectedUsd / solPriceUsd) * 10000) / 10000;
+      const receivedUsd = txResult.solReceived * solPriceUsd + txResult.stablecoinReceivedUsd;
+
+      if (receivedUsd < expectedUsd * 0.9) {
+        res.status(400).json({
+          error: `Insufficient payment received at merchant wallet (${MERCHANT_SOLANA_WALLET.slice(0, 6)}…${MERCHANT_SOLANA_WALLET.slice(-4)}). Expected ~${expectedSol} SOL ($${expectedUsd} USD).`,
+        });
+        return;
+      }
+
+      store.usedPaymentSignatures[rawSig] = {
+        userId: user.id,
+        tier,
+        billing,
+        verifiedAt: new Date().toISOString(),
+      };
+      user.tier = tier;
+      saveStore(store);
+
+      const supabaseSynced = await syncTierToSupabase(user.id, tier);
+
+      res.json({
+        verified: true,
+        signature: rawSig,
+        solReceived: txResult.solReceived,
+        usdValue: Math.round(receivedUsd * 100) / 100,
+        supabaseSynced,
+        profile: toPublicProfile(user),
+      });
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : 'Unable to verify Solana transaction on RPC.';
+      res.status(502).json({ error: message });
+    }
+  });
+
   app.post('/api/auth/reward-ad', requireAuth, (req: AuthenticatedRequest, res) => {
     const user = req.currentUser!;
-    user.bonusChecks = Math.min(user.bonusChecks + 1, 10);
+    syncUserDailyReset(user);
+
+    if (user.tier !== 'Free') {
+      res.status(400).json({
+        error: 'AD_NOT_NEEDED',
+        message: 'Pro and Super plans already include expanded ad-free scan limits.',
+        profile: toPublicProfile(user),
+      });
+      return;
+    }
+
+    const usedAdScans = user.adScansToday ?? 0;
+    if (usedAdScans >= MAX_FREE_AD_SCANS_PER_DAY) {
+      res.status(403).json({
+        error: 'AD_LIMIT_REACHED',
+        message: 'Daily Limit Reached — Upgrade to Pro',
+        profile: toPublicProfile(user),
+      });
+      return;
+    }
+
+    user.adScansToday = usedAdScans + 1;
+    user.bonusChecks = Math.min(user.bonusChecks + 1, MAX_FREE_AD_SCANS_PER_DAY);
     saveStore(store);
     res.json({ profile: toPublicProfile(user) });
   });
@@ -1040,9 +1365,13 @@ async function startServer(): Promise<void> {
     const hasBonusRemaining = user.bonusChecks > 0;
 
     if (!hasDailyRemaining && !hasBonusRemaining) {
+      const adCapReached =
+        user.tier === 'Free' && (user.adScansToday ?? 0) >= MAX_FREE_AD_SCANS_PER_DAY;
       res.status(402).json({
         error: 'DAILY_LIMIT_REACHED',
-        message: 'Daily free scan limit reached. Upgrade to Pro or watch a short ad for +1 free scan.',
+        message: adCapReached
+          ? 'Daily Limit Reached — Upgrade to Pro'
+          : 'Daily free scan limit reached. Upgrade to Pro or watch a short ad for +1 free scan.',
         profile: toPublicProfile(user),
       });
       return;
@@ -1083,8 +1412,8 @@ async function startServer(): Promise<void> {
     }
   });
 
-  // --- 4 GEMINI AI FEATURE ENDPOINTS (gemini-2.5-flash, 10-min per-wallet caching, strictly English) ---
-  app.post('/api/ai/roast', requireAuth, async (req: AuthenticatedRequest, res) => {
+  // --- 4 GEMINI AI FEATURE ENDPOINTS (Pro/Super only, 10-min per-wallet caching, strictly English) ---
+  app.post('/api/ai/roast', requireAuth, requirePaidAiTier, async (req: AuthenticatedRequest, res) => {
     const analysis = (req.body?.walletContext || null) as Partial<WalletAnalysis> | null;
     const walletKey = (analysis?.walletAddress || 'unscanned').trim();
     const cacheKey = `roast:${walletKey}:${analysis?.tradesCount ?? 0}`;
@@ -1146,7 +1475,7 @@ async function startServer(): Promise<void> {
     }
   });
 
-  app.post('/api/ai/what-if', requireAuth, async (req: AuthenticatedRequest, res) => {
+  app.post('/api/ai/what-if', requireAuth, requirePaidAiTier, async (req: AuthenticatedRequest, res) => {
     const analysis = (req.body?.walletContext || null) as Partial<WalletAnalysis> | null;
     const walletKey = (analysis?.walletAddress || 'unscanned').trim();
     const cacheKey = `whatif:${walletKey}:${analysis?.tradesCount ?? 0}`;
@@ -1233,7 +1562,7 @@ async function startServer(): Promise<void> {
     }
   });
 
-  app.post('/api/ai/whale-decode', requireAuth, async (req: AuthenticatedRequest, res) => {
+  app.post('/api/ai/whale-decode', requireAuth, requirePaidAiTier, async (req: AuthenticatedRequest, res) => {
     const targetAddress =
       typeof req.body?.targetWalletAddress === 'string' ? req.body.targetWalletAddress.trim() : '';
 
@@ -1333,7 +1662,7 @@ async function startServer(): Promise<void> {
     }
   });
 
-  app.post('/api/ai/coach', requireAuth, async (req: AuthenticatedRequest, res) => {
+  app.post('/api/ai/coach', requireAuth, requirePaidAiTier, async (req: AuthenticatedRequest, res) => {
     const analysis = (req.body?.walletContext || null) as Partial<WalletAnalysis> | null;
     const rawMessages = Array.isArray(req.body?.messages) ? req.body.messages : [];
     const userMessage =

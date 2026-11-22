@@ -1,6 +1,8 @@
 import type {
   CoachMessage,
   RoastResult,
+  SolanaPaymentQuote,
+  SolanaPaymentVerificationResult,
   SolPriceHistory,
   SubscriptionTier,
   UserProfile,
@@ -143,6 +145,24 @@ export async function decodeWhaleWallet(token: string, targetWalletAddress: stri
 
 export async function fetchSolHistory() {
   return requestJson<SolPriceHistory>('/api/solana/sol-history', { method: 'GET' });
+}
+
+export async function fetchSolanaPaymentQuote(token: string) {
+  return requestJson<SolanaPaymentQuote>('/api/payments/quote', { method: 'GET' }, token);
+}
+
+export async function verifySolanaPayment(
+  token: string,
+  payload: { signature: string; tier: 'Pro' | 'Super'; billing: 'monthly' | 'annual' }
+) {
+  return requestJson<SolanaPaymentVerificationResult>(
+    '/api/payments/verify-solana',
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+    token
+  );
 }
 
 export async function sendCoachMessage(

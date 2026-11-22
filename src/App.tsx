@@ -19,6 +19,7 @@ import { OfflineIndicator } from './components/OfflineIndicator';
 import { PWAInstallButton } from './components/PWAInstallButton';
 import { ScanLimitModal } from './components/ScanLimitModal';
 import { SettingsView } from './components/SettingsView';
+import { SolPriceSparklineCard } from './components/SolPriceSparklineCard';
 import { UpgradeModal } from './components/UpgradeModal';
 import {
   ApiError,
@@ -189,80 +190,93 @@ export default function App() {
       <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 pt-5 pb-24 md:pb-12 space-y-6">
         {activeTab === 'analyzer' && (
           <>
-            {/* Wallet Search Hero Section */}
-            <section className="bg-[#13151B] border border-white/[0.07] rounded-2xl p-4 sm:p-6 space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <div>
-                  <h1 className="font-display text-xl sm:text-2xl font-bold tracking-tight text-white">
-                    Solana Wallet Analyzer
-                  </h1>
-                  <p className="text-xs sm:text-sm text-zinc-400 mt-0.5">
-                    Inspect any public Solana address for real PnL, swaps, win rate, and gas fees.
-                    No wallet connect required.
-                  </p>
+            {/* Wallet Search + 7-Day Solana (SOL) Price Sparkline */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch">
+              <section className="lg:col-span-8 bg-[#13151B] border border-white/[0.07] rounded-2xl p-4 sm:p-6 flex flex-col justify-between gap-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div>
+                    <h1 className="font-display text-xl sm:text-2xl font-bold tracking-tight text-white">
+                      Solana Wallet Analyzer
+                    </h1>
+                    <p className="text-xs sm:text-sm text-zinc-400 mt-0.5">
+                      Inspect any public Solana address for real PnL, swaps, win rate, and gas
+                      fees. No wallet connect required.
+                    </p>
+                  </div>
+                  {analysis && (
+                    <div className="text-xs text-zinc-400 font-mono tabular-nums whitespace-nowrap shrink-0">
+                      Bal {analysis.solBalance.toFixed(3)} SOL
+                    </div>
+                  )}
                 </div>
-                {analysis && (
-                  <div className="text-xs text-zinc-400 font-mono tabular-nums whitespace-nowrap shrink-0">
-                    SOL ${analysis.solPriceUsd.toFixed(2)} · Bal {analysis.solBalance.toFixed(3)} SOL
+
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    void handleScanWallet();
+                  }}
+                  className="flex flex-col sm:flex-row gap-2.5"
+                >
+                  <div className="relative flex-1">
+                    <Search className="w-4 h-4 text-zinc-500 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={walletInput}
+                      onChange={(e) => setWalletInput(e.target.value)}
+                      placeholder="Enter public Solana wallet address (e.g. JUP6Lkb…)"
+                      aria-label="Solana wallet address"
+                      className="w-full min-h-[46px] pl-10 pr-4 bg-[#0A0B0E] border border-white/[0.09] focus:border-[#14F195] focus:outline-none rounded-xl font-mono text-xs sm:text-sm text-white placeholder:text-zinc-600 transition-colors"
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={scanLoading}
+                    className="min-h-[46px] px-6 py-2.5 rounded-xl bg-[#14F195] hover:bg-[#11d984] active:scale-[0.99] text-[#0A0B0E] font-semibold text-sm inline-flex items-center justify-center gap-2 whitespace-nowrap shrink-0 transition-all disabled:opacity-60"
+                  >
+                    <Zap className="w-4 h-4 fill-[#0A0B0E]" />
+                    <span>{scanLoading ? 'Scanning…' : 'Scan Wallet'}</span>
+                  </button>
+                </form>
+
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <span className="text-zinc-500">Try live mainnet address:</span>
+                  {QUICK_TEST_WALLETS.map((w) => (
+                    <button
+                      key={w.address}
+                      type="button"
+                      onClick={() => void handleScanWallet(w.address)}
+                      className="px-2.5 py-1 rounded-lg bg-[#0A0B0E] hover:bg-[#1A1D25] border border-white/[0.07] text-zinc-300 transition-colors"
+                    >
+                      {w.label}
+                    </button>
+                  ))}
+                </div>
+
+                {scanError && (
+                  <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/25 text-xs text-rose-300">
+                    {scanError}
                   </div>
                 )}
+              </section>
+
+              <div className="lg:col-span-4 order-first lg:order-last">
+                <SolPriceSparklineCard
+                  solHistory={solHistory}
+                  liveSpotPrice={analysis?.solPriceUsd}
+                />
               </div>
+            </div>
 
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void handleScanWallet();
-                }}
-                className="flex flex-col sm:flex-row gap-2.5"
-              >
-                <div className="relative flex-1">
-                  <Search className="w-4 h-4 text-zinc-500 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-                  <input
-                    type="text"
-                    value={walletInput}
-                    onChange={(e) => setWalletInput(e.target.value)}
-                    placeholder="Enter public Solana wallet address (e.g. JUP6Lkb…)"
-                    aria-label="Solana wallet address"
-                    className="w-full min-h-[46px] pl-10 pr-4 bg-[#0A0B0E] border border-white/[0.09] focus:border-[#14F195] focus:outline-none rounded-xl font-mono text-xs sm:text-sm text-white placeholder:text-zinc-600 transition-colors"
-                  />
-                </div>
-                <button
-                  type="submit"
-                  disabled={scanLoading}
-                  className="min-h-[46px] px-6 py-2.5 rounded-xl bg-[#14F195] hover:bg-[#11d984] active:scale-[0.99] text-[#0A0B0E] font-semibold text-sm inline-flex items-center justify-center gap-2 whitespace-nowrap shrink-0 transition-all disabled:opacity-60"
-                >
-                  <Zap className="w-4 h-4 fill-[#0A0B0E]" />
-                  <span>{scanLoading ? 'Scanning…' : 'Scan Wallet'}</span>
-                </button>
-              </form>
+            {/* 4 Core Wallet Metrics */}
+            <MetricGrid analysis={analysis} loading={scanLoading} />
 
-              <div className="flex flex-wrap items-center gap-2 text-xs">
-                <span className="text-zinc-500">Try live mainnet address:</span>
-                {QUICK_TEST_WALLETS.map((w) => (
-                  <button
-                    key={w.address}
-                    type="button"
-                    onClick={() => void handleScanWallet(w.address)}
-                    className="px-2.5 py-1 rounded-lg bg-[#0A0B0E] hover:bg-[#1A1D25] border border-white/[0.07] text-zinc-300 transition-colors"
-                  >
-                    {w.label}
-                  </button>
-                ))}
-              </div>
-
-              {scanError && (
-                <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/25 text-xs text-rose-300">
-                  {scanError}
-                </div>
-              )}
-            </section>
-
-            {/* SOL Balance & 7D Sparkline + 4 Core Wallet Metrics */}
-            <MetricGrid analysis={analysis} solHistory={solHistory} loading={scanLoading} />
-
-            {/* 4 Always-Unlocked AI Feature Cards directly below stats */}
+            {/* 4 AI Feature Cards (locked with Pro badge for Free users) */}
             <AiFeatureCards
-              onSelectFeature={(f) => setActiveAiFeature(f)}
+              isFreeTier={profile.tier === 'Free'}
+              onUpgradeRequired={() => setUpgradeOpen(true)}
+              onSelectFeature={(f) =>
+                profile.tier === 'Free' ? setUpgradeOpen(true) : setActiveAiFeature(f)
+              }
               hasScannedWallet={Boolean(analysis)}
               tradesCount={analysis?.tradesCount ?? 0}
             />
@@ -353,9 +367,11 @@ export default function App() {
                   SolidusX AI Suite
                 </h1>
                 <p className="text-xs sm:text-sm text-zinc-400 mt-0.5">
-                  {analysis
-                    ? `Active context: ${analysis.walletAddress.slice(0, 6)}…${analysis.walletAddress.slice(-4)} (${analysis.tradesCount} trades, $${analysis.totalNetPnlUsd.toFixed(2)} PnL)`
-                    : 'No wallet scanned yet — all 4 Gemini AI tools remain unlocked and ready.'}
+                  {profile.tier === 'Free'
+                    ? 'Upgrade to Pro or Super to unlock all 4 Gemini AI trading tools.'
+                    : analysis
+                      ? `Active context: ${analysis.walletAddress.slice(0, 6)}…${analysis.walletAddress.slice(-4)} (${analysis.tradesCount} trades, $${analysis.totalNetPnlUsd.toFixed(2)} PnL)`
+                      : 'No wallet scanned yet — all 4 Gemini AI tools are unlocked and ready.'}
                 </p>
               </div>
               <button
@@ -368,7 +384,11 @@ export default function App() {
             </div>
 
             <AiFeatureCards
-              onSelectFeature={(f) => setActiveAiFeature(f)}
+              isFreeTier={profile.tier === 'Free'}
+              onUpgradeRequired={() => setUpgradeOpen(true)}
+              onSelectFeature={(f) =>
+                profile.tier === 'Free' ? setUpgradeOpen(true) : setActiveAiFeature(f)
+              }
               hasScannedWallet={Boolean(analysis)}
               tradesCount={analysis?.tradesCount ?? 0}
             />
@@ -423,17 +443,22 @@ export default function App() {
         token={token}
         walletContext={analysis}
         onClose={() => setActiveAiFeature(null)}
+        onUpgradeRequired={() => setUpgradeOpen(true)}
       />
 
       <UpgradeModal
         open={upgradeOpen}
+        token={token}
         currentTier={profile.tier}
         onClose={() => setUpgradeOpen(false)}
-        onSelectTier={handleUpgradeTier}
+        onSelectFreeTier={() => handleUpgradeTier('Free')}
+        onPaymentActivated={(updatedProfile) => setProfile(updatedProfile)}
       />
 
       <ScanLimitModal
         open={scanLimitOpen}
+        adScansToday={profile.adScansToday ?? 0}
+        maxAdScans={profile.maxAdScansPerDay ?? 2}
         onClose={() => setScanLimitOpen(false)}
         onUpgradeToPro={() => setUpgradeOpen(true)}
         onClaimRewardedAd={handleClaimRewardedAd}

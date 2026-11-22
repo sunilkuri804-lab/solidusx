@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { PlayCircle, Sparkles, X, Zap } from 'lucide-react';
+import { Lock, PlayCircle, Sparkles, X, Zap } from 'lucide-react';
 
 interface ScanLimitModalProps {
   open: boolean;
+  adScansToday: number;
+  maxAdScans: number;
   onClose: () => void;
   onUpgradeToPro: () => void;
   onClaimRewardedAd: () => Promise<void>;
@@ -10,6 +12,8 @@ interface ScanLimitModalProps {
 
 export const ScanLimitModal: React.FC<ScanLimitModalProps> = ({
   open,
+  adScansToday,
+  maxAdScans,
   onClose,
   onUpgradeToPro,
   onClaimRewardedAd,
@@ -18,6 +22,9 @@ export const ScanLimitModal: React.FC<ScanLimitModalProps> = ({
   const [secondsLeft, setSecondsLeft] = useState(5);
   const [claiming, setClaiming] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const adCapReached = adScansToday >= maxAdScans;
+  const remainingAds = Math.max(0, maxAdScans - adScansToday);
 
   useEffect(() => {
     if (!open) {
@@ -61,11 +68,14 @@ export const ScanLimitModal: React.FC<ScanLimitModalProps> = ({
         <div className="flex items-start justify-between gap-3">
           <div className="space-y-1">
             <h3 id="scan-limit-title" className="font-display text-lg font-bold text-white">
-              Daily Free Scan Limit Reached
+              {adCapReached
+                ? 'Daily Limit Reached — Upgrade to Pro'
+                : 'Daily Free Scan Limit Reached'}
             </h3>
             <p className="text-xs text-zinc-400 leading-relaxed">
-              Free accounts include 1 active wallet scan per day. Choose how you would like to
-              continue:
+              {adCapReached
+                ? 'You have used your 1 free daily scan and all 2 ad-unlocked scans (3 total max per day).'
+                : `Free accounts include 1 free scan per day plus up to ${maxAdScans} ad-unlocked scans (${remainingAds} ad ${remainingAds === 1 ? 'scan' : 'scans'} remaining today).`}
             </p>
           </div>
           {!adPlaying && (
@@ -114,24 +124,46 @@ export const ScanLimitModal: React.FC<ScanLimitModalProps> = ({
               <span className="font-mono tabular-nums text-xs">$19/mo · 50/day</span>
             </button>
 
-            {/* Choice 2: Watch Short Ad for +1 Free Scan */}
+            {/* Choice 2: Watch Short Ad (disabled once 2 ad scans are used for the day) */}
             <button
               type="button"
+              disabled={adCapReached}
               onClick={() => {
+                if (adCapReached) return;
                 setSecondsLeft(5);
                 setAdPlaying(true);
               }}
-              className="w-full min-h-[52px] px-4 py-3 rounded-xl bg-[#0A0B0E] hover:bg-[#1A1D25] border border-white/[0.1] text-white font-medium text-sm flex items-center justify-between gap-3 transition-colors"
+              className="w-full min-h-[52px] px-4 py-3 rounded-xl bg-[#0A0B0E] hover:bg-[#1A1D25] border border-white/[0.1] text-white font-medium text-sm flex items-center justify-between gap-3 transition-colors disabled:opacity-45 disabled:cursor-not-allowed disabled:hover:bg-[#0A0B0E]"
             >
-              <span className="flex items-center gap-2.5">
-                <PlayCircle className="w-4 h-4 text-[#14F195]" />
-                <span>Watch a Short Ad for +1 Free Scan</span>
+              <span className="flex items-center gap-2.5 min-w-0">
+                {adCapReached ? (
+                  <Lock className="w-4 h-4 text-zinc-500 shrink-0" />
+                ) : (
+                  <PlayCircle className="w-4 h-4 text-[#14F195] shrink-0" />
+                )}
+                <span className="truncate">
+                  {adCapReached
+                    ? 'Watch Ad Disabled — Daily Limit Reached'
+                    : 'Watch a Short Ad for +1 Free Scan'}
+                </span>
               </span>
-              <span className="text-xs text-zinc-400 flex items-center gap-1">
-                <Sparkles className="w-3.5 h-3.5" />
-                <span>AdMob</span>
+              <span className="text-xs text-zinc-400 flex items-center gap-1 whitespace-nowrap shrink-0">
+                {adCapReached ? (
+                  <span className="font-mono tabular-nums">2/2 used</span>
+                ) : (
+                  <>
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>{remainingAds} left</span>
+                  </>
+                )}
               </span>
             </button>
+
+            {adCapReached && (
+              <p className="text-[11px] text-center text-zinc-400">
+                Daily Limit Reached — Upgrade to Pro for 50 scans/day and unlocked AI tools.
+              </p>
+            )}
           </div>
         )}
       </div>

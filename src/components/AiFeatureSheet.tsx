@@ -12,6 +12,7 @@ import {
   Zap,
 } from 'lucide-react';
 import {
+  ApiError,
   decodeWhaleWallet,
   generateRoast,
   generateWhatIf,
@@ -31,6 +32,7 @@ interface AiFeatureSheetProps {
   token: string;
   walletContext: WalletAnalysis | null;
   onClose: () => void;
+  onUpgradeRequired: () => void;
 }
 
 const SAMPLE_WHALES = [
@@ -43,6 +45,7 @@ export const AiFeatureSheet: React.FC<AiFeatureSheetProps> = ({
   token,
   walletContext,
   onClose,
+  onUpgradeRequired,
 }) => {
   // Roast state
   const [roast, setRoast] = useState<RoastResult | null>(null);
@@ -118,6 +121,11 @@ export const AiFeatureSheet: React.FC<AiFeatureSheetProps> = ({
         expiresAt: res?.expiresAt,
       });
     } catch (err) {
+      if (err instanceof ApiError && err.code === 'PRO_REQUIRED') {
+        onClose();
+        onUpgradeRequired();
+        return;
+      }
       setRoastError(err instanceof Error ? err.message : 'Unable to generate roast.');
     } finally {
       setRoastLoading(false);
@@ -164,6 +172,11 @@ export const AiFeatureSheet: React.FC<AiFeatureSheetProps> = ({
         expiresAt: res?.expiresAt,
       });
     } catch (err) {
+      if (err instanceof ApiError && err.code === 'PRO_REQUIRED') {
+        onClose();
+        onUpgradeRequired();
+        return;
+      }
       setWhatIfError(err instanceof Error ? err.message : 'Unable to simulate missed profits.');
     } finally {
       setWhatIfLoading(false);
@@ -183,6 +196,11 @@ export const AiFeatureSheet: React.FC<AiFeatureSheetProps> = ({
       const res = await decodeWhaleWallet(token, target);
       setWhaleResult(res);
     } catch (err) {
+      if (err instanceof ApiError && err.code === 'PRO_REQUIRED') {
+        onClose();
+        onUpgradeRequired();
+        return;
+      }
       setWhaleError(err instanceof Error ? err.message : 'Unable to decode wallet.');
     } finally {
       setWhaleLoading(false);
@@ -215,6 +233,11 @@ export const AiFeatureSheet: React.FC<AiFeatureSheetProps> = ({
       };
       setCoachMessages((prev) => [...prev, aiMsg]);
     } catch (err) {
+      if (err instanceof ApiError && err.code === 'PRO_REQUIRED') {
+        onClose();
+        onUpgradeRequired();
+        return;
+      }
       setCoachError(err instanceof Error ? err.message : 'AI Coach failed to respond.');
     } finally {
       setCoachLoading(false);

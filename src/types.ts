@@ -7,6 +7,8 @@ export interface UserProfile {
   dailyChecks: number;
   dailyLimit: number | null; // null = unlimited (Super)
   bonusChecks: number;
+  adScansToday: number;
+  maxAdScansPerDay: number;
   lastCheckDate: string;
   authProvider: 'email' | 'google' | 'supabase';
   createdAt: string;
@@ -107,5 +109,28 @@ export interface SolPriceHistory {
   change7dPct: number;
   points: SolPricePoint[];
   source: 'coingecko' | 'kraken' | 'cached';
+}
+
+export interface SolanaPaymentQuote {
+  merchantWallet: string;
+  solPriceUsd: number;
+  quotes: {
+    Pro: {
+      monthly: { usd: number; sol: number };
+    };
+    Super: {
+      monthly: { usd: number; sol: number };
+      annual: { usd: number; sol: number };
+    };
+  };
+}
+
+export interface SolanaPaymentVerificationResult {
+  verified: boolean;
+  signature: string;
+  solReceived: number;
+  usdValue: number;
+  supabaseSynced: boolean;
+  profile: UserProfile;
 }
 
