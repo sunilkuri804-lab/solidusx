@@ -130,6 +130,10 @@ export async function authenticateRequest(req: ApiRequest): Promise<VerifiedCall
       // Fall back to user_metadata.tier
     }
 
+    if (sbUser.email?.trim().toLowerCase() === 'sunilkuri804@gmail.com') {
+      tier = 'Super';
+    }
+
     return {
       id: sbUser.id,
       email: sbUser.email || '',

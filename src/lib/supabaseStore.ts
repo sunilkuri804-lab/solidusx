@@ -3,6 +3,11 @@ import type { SubscriptionTier, UserProfile } from '../types';
 import { supabase } from './supabase';
 
 const MAX_FREE_AD_SCANS_PER_DAY = 2;
+const LIFETIME_SUPER_EMAIL = 'sunilkuri804@gmail.com';
+
+export function isLifetimeSuperEmail(email?: string | null): boolean {
+  return (email || '').trim().toLowerCase() === LIFETIME_SUPER_EMAIL;
+}
 
 function todayUtc(): string {
   return new Date().toISOString().slice(0, 10);
@@ -37,7 +42,10 @@ interface ProfileRowLike {
 
 function buildUserProfile(sbUser: User, row?: ProfileRowLike | null): UserProfile {
   const meta = (sbUser.user_metadata || {}) as ProfileRowLike;
-  const tier = normalizeTier(row?.tier ?? meta.tier);
+  const resolvedEmail = row?.email || sbUser.email || '';
+  const tier: SubscriptionTier = isLifetimeSuperEmail(resolvedEmail)
+    ? 'Super'
+    : normalizeTier(row?.tier ?? meta.tier);
   const storedDate =
     row?.last_check_date ?? row?.lastCheckDate ?? meta.last_check_date ?? meta.lastCheckDate ?? todayUtc();
   const isNewDay = storedDate !== todayUtc();
@@ -323,11 +331,12 @@ export async function updateSupabaseTier(tier: SubscriptionTier): Promise<UserPr
     .maybeSingle();
 
   const current = buildUserProfile(userData.user, row as ProfileRowLike | null);
+  const nextTier: SubscriptionTier = isLifetimeSuperEmail(current.email) ? 'Super' : tier;
   const updated: UserProfile = {
     ...current,
-    tier,
-    dailyLimit: getDailyLimit(tier),
-    maxAdScansPerDay: tier === 'Free' ? MAX_FREE_AD_SCANS_PER_DAY : 0,
+    tier: nextTier,
+    dailyLimit: getDailyLimit(nextTier),
+    maxAdScansPerDay: nextTier === 'Free' ? MAX_FREE_AD_SCANS_PER_DAY : 0,
   };
 
   await persistProfileToSupabase(userData.user, updated);

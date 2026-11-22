@@ -45,10 +45,23 @@ const QUICK_TEST_WALLETS = [
 const AUTH_TOKEN_STORAGE_KEY = 'solidusx_session_token_v1';
 const AUTH_PROFILE_STORAGE_KEY = 'solidusx_session_profile_v1';
 
+function normalizeLifetimeSuperProfile(profile: UserProfile): UserProfile {
+  if (profile.email.trim().toLowerCase() === 'sunilkuri804@gmail.com') {
+    return {
+      ...profile,
+      tier: 'Super',
+      dailyLimit: null,
+      maxAdScansPerDay: 0,
+    };
+  }
+  return profile;
+}
+
 function savePersistedSession(token: string, profile: UserProfile): void {
   try {
+    const normalized = normalizeLifetimeSuperProfile(profile);
     window.localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, token);
-    window.localStorage.setItem(AUTH_PROFILE_STORAGE_KEY, JSON.stringify(profile));
+    window.localStorage.setItem(AUTH_PROFILE_STORAGE_KEY, JSON.stringify(normalized));
   } catch {
     // Ignore storage quota errors
   }
@@ -59,7 +72,9 @@ function loadPersistedSession(): { token: string; profile: UserProfile | null } 
     const savedToken = window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
     if (!savedToken) return null;
     const rawProfile = window.localStorage.getItem(AUTH_PROFILE_STORAGE_KEY);
-    const parsedProfile = rawProfile ? (JSON.parse(rawProfile) as UserProfile) : null;
+    const parsedProfile = rawProfile
+      ? normalizeLifetimeSuperProfile(JSON.parse(rawProfile) as UserProfile)
+      : null;
     return { token: savedToken, profile: parsedProfile };
   } catch {
     return null;

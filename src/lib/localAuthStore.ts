@@ -2,6 +2,11 @@ import type { SubscriptionTier, UserProfile } from '../types';
 
 const USERS_STORAGE_KEY = 'solidusx_local_users_v1';
 const MAX_FREE_AD_SCANS_PER_DAY = 2;
+const LIFETIME_SUPER_EMAIL = 'sunilkuri804@gmail.com';
+
+function isLifetimeSuperEmail(email?: string | null): boolean {
+  return (email || '').trim().toLowerCase() === LIFETIME_SUPER_EMAIL;
+}
 
 interface LocalUserRecord {
   id: string;
@@ -68,15 +73,16 @@ function syncDailyReset(rec: LocalUserRecord): boolean {
 }
 
 function toProfile(rec: LocalUserRecord): UserProfile {
+  const effectiveTier: SubscriptionTier = isLifetimeSuperEmail(rec.email) ? 'Super' : rec.tier;
   return {
     id: rec.id,
     email: rec.email,
-    tier: rec.tier,
+    tier: effectiveTier,
     dailyChecks: rec.dailyChecks,
-    dailyLimit: getDailyLimit(rec.tier),
+    dailyLimit: getDailyLimit(effectiveTier),
     bonusChecks: rec.bonusChecks,
     adScansToday: rec.adScansToday,
-    maxAdScansPerDay: rec.tier === 'Free' ? MAX_FREE_AD_SCANS_PER_DAY : 0,
+    maxAdScansPerDay: effectiveTier === 'Free' ? MAX_FREE_AD_SCANS_PER_DAY : 0,
     lastCheckDate: rec.lastCheckDate,
     authProvider: 'email',
     createdAt: rec.createdAt,
@@ -116,7 +122,7 @@ export async function localSignUp(
     email,
     passwordSalt: salt,
     passwordHash: hash,
-    tier: 'Free',
+    tier: isLifetimeSuperEmail(email) ? 'Super' : 'Free',
     dailyChecks: 0,
     bonusChecks: 0,
     adScansToday: 0,
@@ -143,7 +149,12 @@ export async function localLogin(
   if (hash !== record.passwordHash) {
     throw new Error('Invalid email or password.');
   }
-  if (syncDailyReset(record)) saveUsers(users);
+  let changed = syncDailyReset(record);
+  if (isLifetimeSuperEmail(record.email) && record.tier !== 'Super') {
+    record.tier = 'Super';
+    changed = true;
+  }
+  if (changed) saveUsers(users);
   return { token: makeLocalToken(email), profile: toProfile(record) };
 }
 
@@ -153,7 +164,12 @@ export function localGetProfile(token: string): UserProfile | null {
   const users = loadUsers();
   const record = users[email];
   if (!record) return null;
-  if (syncDailyReset(record)) saveUsers(users);
+  let changed = syncDailyReset(record);
+  if (isLifetimeSuperEmail(record.email) && record.tier !== 'Super') {
+    record.tier = 'Super';
+    changed = true;
+  }
+  if (changed) saveUsers(users);
   return toProfile(record);
 }
 
@@ -164,6 +180,9 @@ export function localConsumeScan(token: string): UserProfile {
   const record = users[email];
   if (!record) throw new Error('Account not found.');
   syncDailyReset(record);
+  if (isLifetimeSuperEmail(record.email)) {
+    record.tier = 'Super';
+  }
 
   const limit = getDailyLimit(record.tier);
   if (limit === null || record.dailyChecks < limit) {
@@ -207,7 +226,7 @@ export function localUpdateTier(token: string, tier: SubscriptionTier): UserProf
   const users = loadUsers();
   const record = users[email];
   if (!record) throw new Error('Account not found.');
-  record.tier = tier;
+  record.tier = isLifetimeSuperEmail(record.email) ? 'Super' : tier;
   saveUsers(users);
   return toProfile(record);
 }

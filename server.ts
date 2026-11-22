@@ -134,6 +134,12 @@ function todayUtc(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+const LIFETIME_SUPER_EMAIL = 'sunilkuri804@gmail.com';
+
+function isLifetimeSuperEmail(email?: string | null): boolean {
+  return (email || '').trim().toLowerCase() === LIFETIME_SUPER_EMAIL;
+}
+
 function getDailyLimit(tier: SubscriptionTier): number | null {
   if (tier === 'Free') return 1;
   if (tier === 'Pro') return 50;
@@ -141,6 +147,11 @@ function getDailyLimit(tier: SubscriptionTier): number | null {
 }
 
 function syncUserDailyReset(user: StoredUser): boolean {
+  let changed = false;
+  if (isLifetimeSuperEmail(user.email) && user.tier !== 'Super') {
+    user.tier = 'Super';
+    changed = true;
+  }
   const today = todayUtc();
   if (user.lastCheckDate !== today) {
     user.lastCheckDate = today;
@@ -149,21 +160,22 @@ function syncUserDailyReset(user: StoredUser): boolean {
     if (user.tier === 'Free') {
       user.bonusChecks = 0;
     }
-    return true;
+    changed = true;
   }
-  return false;
+  return changed;
 }
 
 function toPublicProfile(user: StoredUser): UserProfile {
+  const effectiveTier: SubscriptionTier = isLifetimeSuperEmail(user.email) ? 'Super' : user.tier;
   return {
     id: user.id,
     email: user.email,
-    tier: user.tier,
+    tier: effectiveTier,
     dailyChecks: user.dailyChecks,
-    dailyLimit: getDailyLimit(user.tier),
+    dailyLimit: getDailyLimit(effectiveTier),
     bonusChecks: user.bonusChecks,
     adScansToday: user.adScansToday ?? 0,
-    maxAdScansPerDay: user.tier === 'Free' ? MAX_FREE_AD_SCANS_PER_DAY : 0,
+    maxAdScansPerDay: effectiveTier === 'Free' ? MAX_FREE_AD_SCANS_PER_DAY : 0,
     lastCheckDate: user.lastCheckDate,
     authProvider: user.authProvider,
     createdAt: user.createdAt,
@@ -257,7 +269,7 @@ async function resolveAuthenticatedUser(req: Request): Promise<StoredUser | null
             existing = {
               id: sbUser.id || crypto.randomUUID(),
               email: sbUser.email,
-              tier: 'Free',
+              tier: isLifetimeSuperEmail(sbUser.email) ? 'Super' : 'Free',
               dailyChecks: 0,
               bonusChecks: 0,
               adScansToday: 0,
@@ -1226,7 +1238,7 @@ async function startServer(): Promise<void> {
       email,
       passwordHash: hash,
       passwordSalt: salt,
-      tier: 'Free',
+      tier: isLifetimeSuperEmail(email) ? 'Super' : 'Free',
       dailyChecks: 0,
       bonusChecks: 0,
       adScansToday: 0,
@@ -1293,7 +1305,7 @@ async function startServer(): Promise<void> {
       return;
     }
     const user = req.currentUser!;
-    user.tier = 'Free';
+    user.tier = isLifetimeSuperEmail(user.email) ? 'Super' : 'Free';
     saveStore(store);
     res.json({ profile: toPublicProfile(user) });
   });
