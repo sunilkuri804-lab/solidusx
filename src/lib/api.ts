@@ -289,16 +289,32 @@ export async function loginEmail(email: string, password: string) {
 
 export async function fetchProfile(token: string) {
   if (isSupabaseConfigured) {
-    const res = await getSupabaseUserProfile();
-    return { profile: applyVipSuperOverride(res.profile) };
+    try {
+      const res = await getSupabaseUserProfile();
+      return { profile: applyVipSuperOverride(res.profile) };
+    } catch (err) {
+      const cached = loadUserSession()?.profile;
+      if (cached) {
+        return { profile: applyVipSuperOverride(cached) };
+      }
+      throw err;
+    }
   }
   if (token.startsWith('local.')) {
     const profile = localGetProfile(token) || loadUserSession()?.profile || null;
     if (!profile) throw new ApiError('Session expired.', 401);
     return { profile: applyVipSuperOverride(profile) };
   }
-  const res = await requestJson<{ profile: UserProfile }>('/api/auth/me', { method: 'GET' }, token);
-  return { profile: applyVipSuperOverride(res.profile) };
+  try {
+    const res = await requestJson<{ profile: UserProfile }>('/api/auth/me', { method: 'GET' }, token);
+    return { profile: applyVipSuperOverride(res.profile) };
+  } catch (err) {
+    const cached = loadUserSession()?.profile;
+    if (cached) {
+      return { profile: applyVipSuperOverride(cached) };
+    }
+    throw err;
+  }
 }
 
 export async function upgradeTier(token: string, tier: SubscriptionTier) {

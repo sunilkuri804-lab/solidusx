@@ -37,7 +37,7 @@ import {
 } from './lib/api';
 import { clearUserSession, loadUserSession, saveUserSession } from './lib/sessionStorage';
 import { isSupabaseConfigured, supabase } from './lib/supabase';
-import { applyVipSuperOverride, isVipSuperEmail } from './lib/vip';
+import { applyVipSuperOverride, isSuperUser, isVipSuperEmail } from './lib/vip';
 import type { SolPriceHistory, SubscriptionTier, UserProfile, WalletAnalysis } from './types';
 
 const QUICK_TEST_WALLETS = [
@@ -67,11 +67,20 @@ function buildFallbackOAuthProfile(sbUser: User): UserProfile {
 
 export default function App() {
   const [initialSession] = useState(() => loadUserSession());
-  const [authInitializing, setAuthInitializing] = useState(() => !initialSession);
+  const [authInitializing, setAuthInitializing] = useState(() => {
+    if (initialSession) return false;
+    if (typeof window !== 'undefined') {
+      const hash = window.location.hash || '';
+      const search = window.location.search || '';
+      if (hash.includes('access_token=') || search.includes('code=')) {
+        return true;
+      }
+    }
+    return false;
+  });
   const [token, setToken] = useState<string | null>(() => initialSession?.token ?? null);
   const [profile, setProfile] = useState<UserProfile | null>(() => initialSession?.profile ?? null);
   const [activeTab, setActiveTab] = useState<AppTab>('analyzer');
-  const explicitSignOutRef = useRef(false);
 
   const [walletInput, setWalletInput] = useState('');
   const [analysis, setAnalysis] = useState<WalletAnalysis | null>(null);
@@ -112,32 +121,21 @@ export default function App() {
     };
   }, []);
 
-  // Keep solidusx_user_session in sync when tier or daily checks update
+  // Keep solidusx_session in sync whenever tier or scan counts change
   useEffect(() => {
     if (token && profile) {
       saveUserSession(token, profile);
     }
   }, [token, profile]);
 
-  // Check Supabase OAuth / persisted session & subscribe to auth state changes
+  // Listen for OAuth logins and check Supabase session without ever wiping solidusx_session on /api errors
   useEffect(() => {
     let mounted = true;
 
-    const { data: sub } = supabase.auth.onAuthStateChange(async (event, session) => {
+    const { data: sub } = supabase.auth.onAuthStateChange(async (_event, session) => {
       if (!mounted) return;
-      if (event === 'SIGNED_OUT') {
-        if (explicitSignOutRef.current) {
-          clearUserSession();
-          setToken(null);
-          setProfile(null);
-        }
-        setAuthInitializing(false);
-        return;
-      }
-
       const accessToken = session?.access_token;
       if (accessToken && session?.user) {
-        explicitSignOutRef.current = false;
         const immediateProfile = buildFallbackOAuthProfile(session.user);
         saveUserSession(accessToken, immediateProfile);
         setToken(accessToken);
@@ -152,7 +150,7 @@ export default function App() {
             saveUserSession(accessToken, normalized);
             setProfile(normalized);
           } catch {
-            // Keep the persisted OAuth session even if /api or profile table fetch fails
+            // Keep persisted solidusx_session intact even if /api/* fails
           }
         }
       }
@@ -164,7 +162,6 @@ export default function App() {
         const accessToken = data.session?.access_token;
 
         if (accessToken && data.session?.user) {
-          explicitSignOutRef.current = false;
           const immediateProfile = buildFallbackOAuthProfile(data.session.user);
           if (!mounted) return;
           saveUserSession(accessToken, immediateProfile);
@@ -179,15 +176,16 @@ export default function App() {
               saveUserSession(accessToken, normalized);
               setProfile(normalized);
             } catch {
-              // Keep existing session on network or /api failure
+              // Never clear session if /api/* fails
             }
           }
           return;
         }
 
-        // Background-refresh existing localStorage session without ever clearing it if /api fails
+        // For non-Supabase sessions already restored synchronously from localStorage:
+        // Only run a silent Express refresh if it's a non-local token and ignore any 404/network failure.
         const saved = loadUserSession();
-        if (saved?.token) {
+        if (saved?.token && !saved.token.startsWith('local.')) {
           try {
             const { profile: fetched } = await fetchProfile(saved.token);
             if (!mounted) return;
@@ -196,11 +194,11 @@ export default function App() {
             setToken(saved.token);
             setProfile(normalized);
           } catch {
-            // NEVER clear session on page reload if /api/* fails (e.g. 404/401/offline on Vercel)
+            // Do NOT log out or clear solidusx_session on /api/* failure
           }
         }
       } catch {
-        // Ignore transient startup check errors; keep restored session if present
+        // Never log out or clear solidusx_session on startup check failure
       } finally {
         if (mounted) setAuthInitializing(false);
       }
@@ -215,7 +213,6 @@ export default function App() {
   }, []);
 
   const handleAuthenticated = useCallback((newToken: string, newProfile: UserProfile) => {
-    explicitSignOutRef.current = false;
     const normalized = applyVipSuperOverride(newProfile);
     saveUserSession(newToken, normalized);
     setToken(newToken);
@@ -225,7 +222,6 @@ export default function App() {
   }, []);
 
   const handleSignOut = useCallback(async () => {
-    explicitSignOutRef.current = true;
     clearUserSession();
     await supabase.auth.signOut().catch(() => {});
     setToken(null);
@@ -237,7 +233,6 @@ export default function App() {
 
   const handleDeleteAccount = useCallback(async () => {
     if (!token) return;
-    explicitSignOutRef.current = true;
     await deleteAccount(token);
     clearUserSession();
     await supabase.auth.signOut().catch(() => {});
@@ -311,7 +306,8 @@ export default function App() {
   }
 
   const effectiveProfile = applyVipSuperOverride(profile);
-  const isVipOrPaid = isVipSuperEmail(effectiveProfile.email) || effectiveProfile.tier !== 'Free';
+  const isSuper = isSuperUser(effectiveProfile.email, effectiveProfile.tier);
+  const isVipOrPaid = isSuper || isVipSuperEmail(effectiveProfile.email) || effectiveProfile.tier !== 'Free';
 
   return (
     <div className="min-h-screen bg-[#0A0B0E] text-[#F3F4F6] flex flex-col">
