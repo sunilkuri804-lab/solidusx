@@ -52,6 +52,24 @@ export function getSupabaseConfig() {
   return { url: url.replace(/\/$/, ''), anonKey, serviceKey };
 }
 
+export function isLiveSupabaseUrl(url: string): boolean {
+  if (!url) return false;
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname === 'supabase.co' || parsed.hostname === 'www.supabase.co') {
+      return false;
+    }
+    return parsed.protocol === 'https:' || parsed.hostname === 'localhost';
+  } catch {
+    return false;
+  }
+}
+
+export function isVercelSupabaseConfigured(): boolean {
+  const { url, anonKey } = getSupabaseConfig();
+  return isLiveSupabaseUrl(url) && anonKey.length > 0;
+}
+
 export interface VerifiedCaller {
   id: string;
   email: string;
@@ -316,12 +334,13 @@ export async function fetchSol7DayHistory(): Promise<SolPriceHistory> {
 
 export function getRpcEndpoints(): string[] {
   const heliusKey = getEnv('HELIUS_API_KEY');
+  const heliusRpc = getEnv('HELIUS_RPC_URL') || getEnv('VITE_HELIUS_RPC_URL') || 'https://helius-rpc.com';
   const list: string[] = [];
   if (heliusKey) {
     list.push(`https://mainnet.helius-rpc.com/?api-key=${encodeURIComponent(heliusKey)}`);
   }
-  list.push('https://api.mainnet-beta.solana.com', 'https://solana-rpc.publicnode.com');
-  return list;
+  list.push(heliusRpc, 'https://api.mainnet-beta.solana.com', 'https://solana-rpc.publicnode.com');
+  return Array.from(new Set(list));
 }
 
 export async function rpcCall<T>(endpoint: string, method: string, params: unknown[]): Promise<T> {

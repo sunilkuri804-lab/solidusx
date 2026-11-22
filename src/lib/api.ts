@@ -22,7 +22,16 @@ import {
   signUpWithSupabase,
   updateSupabaseTier,
 } from './supabaseStore';
-import { isSupabaseConfigured } from './supabase';
+import {
+  localClaimRewardAd,
+  localConsumeScan,
+  localDeleteAccount,
+  localGetProfile,
+  localLogin,
+  localSignUp,
+  localUpdateTier,
+} from './localAuthStore';
+import { HELIUS_RPC_URL, isSupabaseConfigured } from './supabase';
 
 const MERCHANT_SOLANA_WALLET = '9XEcqn4CfftDGx3DJLdHgPc7KoF9YPUgeQvHaBztCEt2';
 const SOLANA_SIGNATURE_REGEX = /^[1-9A-HJ-NP-Za-km-z]{64,90}$/;
@@ -141,10 +150,13 @@ async function fetchSolHistoryBrowserFallback(): Promise<SolPriceHistory> {
 }
 
 async function rpcPostBrowser<T>(method: string, params: unknown[]): Promise<T> {
-  const endpoints = [
-    'https://api.mainnet-beta.solana.com',
-    'https://solana-rpc.publicnode.com',
-  ];
+  const endpoints = Array.from(
+    new Set([
+      HELIUS_RPC_URL,
+      'https://api.mainnet-beta.solana.com',
+      'https://solana-rpc.publicnode.com',
+    ])
+  );
   for (const endpoint of endpoints) {
     try {
       const resp = await fetch(endpoint, {
@@ -244,10 +256,7 @@ export async function signUpEmail(email: string, password: string) {
     });
   } catch (err) {
     if (err instanceof ApiError && err.status === 404) {
-      throw new ApiError(
-        'Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in your deployment environment variables to enable direct Supabase Auth.',
-        404
-      );
+      return localSignUp(email, password);
     }
     throw err;
   }
@@ -264,10 +273,7 @@ export async function loginEmail(email: string, password: string) {
     });
   } catch (err) {
     if (err instanceof ApiError && err.status === 404) {
-      throw new ApiError(
-        'Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in your deployment environment variables to enable direct Supabase Auth.',
-        404
-      );
+      return localLogin(email, password);
     }
     throw err;
   }
@@ -277,6 +283,11 @@ export async function fetchProfile(token: string) {
   if (isSupabaseConfigured) {
     const res = await getSupabaseUserProfile();
     return { profile: res.profile };
+  }
+  if (token.startsWith('local.')) {
+    const profile = localGetProfile(token);
+    if (!profile) throw new ApiError('Session expired.', 401);
+    return { profile };
   }
   return requestJson<{ profile: UserProfile }>('/api/auth/me', { method: 'GET' }, token);
 }
@@ -292,6 +303,16 @@ export async function upgradeTier(token: string, tier: SubscriptionTier) {
     }
     const profile = await updateSupabaseTier('Free');
     return { profile };
+  }
+  if (token.startsWith('local.')) {
+    if (tier !== 'Free') {
+      throw new ApiError(
+        'Upgrading to Pro or Super requires a verified Solana transaction signature.',
+        402,
+        'PAYMENT_REQUIRED'
+      );
+    }
+    return { profile: localUpdateTier(token, 'Free') };
   }
   return requestJson<{ profile: UserProfile }>(
     '/api/auth/upgrade',
@@ -313,6 +334,14 @@ export async function claimRewardedAdScan(token: string) {
       throw new ApiError(e.message, e.code === 'AD_LIMIT_REACHED' ? 403 : 400, e.code, e.profile);
     }
   }
+  if (token.startsWith('local.')) {
+    try {
+      return { profile: localClaimRewardAd(token) };
+    } catch (err) {
+      const e = err as Error & { code?: string; profile?: UserProfile };
+      throw new ApiError(e.message, e.code === 'AD_LIMIT_REACHED' ? 403 : 400, e.code, e.profile);
+    }
+  }
   return requestJson<{ profile: UserProfile }>(
     '/api/auth/reward-ad',
     { method: 'POST' },
@@ -325,6 +354,10 @@ export async function deleteAccount(token: string) {
     await deleteSupabaseAccount();
     return { deleted: true };
   }
+  if (token.startsWith('local.')) {
+    localDeleteAccount(token);
+    return { deleted: true };
+  }
   return requestJson<{ deleted: boolean }>('/api/auth/account', { method: 'DELETE' }, token);
 }
 
@@ -333,8 +366,15 @@ export async function deleteAccount(token: string) {
 export async function analyzeWallet(token: string, walletAddress: string) {
   const cleaned = walletAddress.trim();
 
-  if (isSupabaseConfigured) {
-    const { profile: currentProfile } = await getSupabaseUserProfile();
+  if (isSupabaseConfigured || token.startsWith('local.')) {
+    const currentProfile = isSupabaseConfigured
+      ? (await getSupabaseUserProfile()).profile
+      : localGetProfile(token);
+
+    if (!currentProfile) {
+      throw new ApiError('Session expired. Please sign in again.', 401);
+    }
+
     const hasDaily =
       currentProfile.dailyLimit === null || currentProfile.dailyChecks < currentProfile.dailyLimit;
     const hasBonus = currentProfile.bonusChecks > 0;
@@ -364,7 +404,7 @@ export async function analyzeWallet(token: string, walletAddress: string) {
       );
       analysis = res.analysis;
     } catch (err) {
-      if (err instanceof ApiError && err.status === 404) {
+      if (err instanceof ApiError && (err.status === 404 || err.status === 401)) {
         analysis = await analyzeWalletBrowserFallback(cleaned);
       } else {
         throw err;
@@ -373,7 +413,9 @@ export async function analyzeWallet(token: string, walletAddress: string) {
 
     const updatedProfile =
       !analysis.isEmpty && analysis.tradesCount > 0
-        ? await consumeSupabaseScanCredit()
+        ? isSupabaseConfigured
+          ? await consumeSupabaseScanCredit()
+          : localConsumeScan(token)
         : currentProfile;
 
     return { analysis, profile: updatedProfile };
@@ -534,7 +576,7 @@ export async function fetchSolanaPaymentQuote(token: string): Promise<SolanaPaym
   try {
     return await requestJson<SolanaPaymentQuote>('/api/payments/quote', { method: 'GET' }, token);
   } catch (err) {
-    if (err instanceof ApiError && err.status === 404) {
+    if (err instanceof ApiError && (err.status === 404 || err.status === 401)) {
       const solPriceUsd = await fetchSolPriceBrowserFallback();
       const toSol = (usd: number) => Math.ceil((usd / solPriceUsd) * 10000) / 10000;
       return {
@@ -582,7 +624,9 @@ export async function verifySolanaPayment(
 
     const profile = isSupabaseConfigured
       ? await updateSupabaseTier(payload.tier)
-      : res.profile!;
+      : token.startsWith('local.')
+        ? localUpdateTier(token, payload.tier)
+        : res.profile!;
 
     return {
       verified: Boolean(res.verified),
@@ -593,8 +637,8 @@ export async function verifySolanaPayment(
       profile,
     };
   } catch (err) {
-    if (err instanceof ApiError && err.status === 404) {
-      // Browser RPC fallback if /api/* is unavailable on purely static host
+    if (err instanceof ApiError && (err.status === 404 || err.status === 401)) {
+      // Browser RPC fallback if /api/* is unavailable or unauthenticated on purely static host
       const tx = await rpcPostBrowser<{
         meta?: { err?: unknown; preBalances?: number[]; postBalances?: number[] };
         transaction?: { message?: { accountKeys?: Array<string | { pubkey?: string }> } };
@@ -627,7 +671,9 @@ export async function verifySolanaPayment(
           `Insufficient SOL received at merchant wallet (${MERCHANT_SOLANA_WALLET.slice(0, 6)}…).`
         );
       }
-      const profile = await updateSupabaseTier(payload.tier);
+      const profile = isSupabaseConfigured
+        ? await updateSupabaseTier(payload.tier)
+        : localUpdateTier(token, payload.tier);
       return {
         verified: true,
         signature: sig,

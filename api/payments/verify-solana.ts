@@ -2,11 +2,13 @@ import {
   authenticateRequest,
   fetchSolPriceUsd,
   getSupabaseConfig,
+  isVercelSupabaseConfigured,
   MERCHANT_SOLANA_WALLET,
   SOLANA_SIGNATURE_REGEX,
   verifySolanaPaymentOnRpc,
   type ApiRequest,
   type ApiResponse,
+  type VerifiedCaller,
 } from '../_shared.js';
 import type { SubscriptionTier } from '../../src/types';
 
@@ -21,10 +23,13 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
     return;
   }
 
-  const caller = await authenticateRequest(req);
-  if (!caller) {
-    res.status(401).json({ error: 'Authentication required. Please sign in to continue.' });
-    return;
+  let caller: VerifiedCaller | null = null;
+  if (isVercelSupabaseConfigured()) {
+    caller = await authenticateRequest(req);
+    if (!caller) {
+      res.status(401).json({ error: 'Authentication required. Please sign in to continue.' });
+      return;
+    }
   }
 
   const rawSig = typeof req.body?.signature === 'string' ? req.body.signature.trim() : '';
@@ -104,7 +109,7 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
     }
 
     let supabaseSynced = false;
-    if (url && serviceKey) {
+    if (url && serviceKey && caller) {
       await fetch(`${url}/rest/v1/used_payment_signatures`, {
         method: 'POST',
         headers: {

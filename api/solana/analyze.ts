@@ -2,6 +2,7 @@ import {
   analyzeSolanaWalletOnChain,
   authenticateRequest,
   BASE58_REGEX,
+  isVercelSupabaseConfigured,
   type ApiRequest,
   type ApiResponse,
 } from '../_shared.js';
@@ -12,10 +13,12 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
     return;
   }
 
-  const caller = await authenticateRequest(req);
-  if (!caller) {
-    res.status(401).json({ error: 'Authentication required. Please sign in to continue.' });
-    return;
+  if (isVercelSupabaseConfigured()) {
+    const caller = await authenticateRequest(req);
+    if (!caller) {
+      res.status(401).json({ error: 'Authentication required. Please sign in to continue.' });
+      return;
+    }
   }
 
   const rawAddress = typeof req.body?.walletAddress === 'string' ? req.body.walletAddress.trim() : '';

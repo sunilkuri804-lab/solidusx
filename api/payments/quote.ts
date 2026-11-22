@@ -1,6 +1,7 @@
 import {
   authenticateRequest,
   fetchSolPriceUsd,
+  isVercelSupabaseConfigured,
   MERCHANT_SOLANA_WALLET,
   type ApiRequest,
   type ApiResponse,
@@ -12,10 +13,12 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
     return;
   }
 
-  const caller = await authenticateRequest(req);
-  if (!caller) {
-    res.status(401).json({ error: 'Authentication required. Please sign in to continue.' });
-    return;
+  if (isVercelSupabaseConfigured()) {
+    const caller = await authenticateRequest(req);
+    if (!caller) {
+      res.status(401).json({ error: 'Authentication required. Please sign in to continue.' });
+      return;
+    }
   }
 
   const solPriceUsd = await fetchSolPriceUsd();
