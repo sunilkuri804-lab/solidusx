@@ -18,6 +18,7 @@ import {
   generateWhatIf,
   sendCoachMessage,
 } from '../lib/api';
+import { isVipSuperEmail } from '../lib/vip';
 import type {
   CoachMessage,
   RoastResult,
@@ -30,6 +31,7 @@ import type { AiFeatureType } from './AiFeatureCards';
 interface AiFeatureSheetProps {
   feature: AiFeatureType | null;
   token: string;
+  userEmail?: string;
   walletContext: WalletAnalysis | null;
   onClose: () => void;
   onUpgradeRequired: () => void;
@@ -43,10 +45,12 @@ const SAMPLE_WHALES = [
 export const AiFeatureSheet: React.FC<AiFeatureSheetProps> = ({
   feature,
   token,
+  userEmail,
   walletContext,
   onClose,
   onUpgradeRequired,
 }) => {
+  const isVip = isVipSuperEmail(userEmail);
   // Roast state
   const [roast, setRoast] = useState<RoastResult | null>(null);
   const [roastLoading, setRoastLoading] = useState(false);
@@ -121,7 +125,7 @@ export const AiFeatureSheet: React.FC<AiFeatureSheetProps> = ({
         expiresAt: res?.expiresAt,
       });
     } catch (err) {
-      if (err instanceof ApiError && err.code === 'PRO_REQUIRED') {
+      if (!isVip && err instanceof ApiError && err.code === 'PRO_REQUIRED') {
         onClose();
         onUpgradeRequired();
         return;
@@ -172,7 +176,7 @@ export const AiFeatureSheet: React.FC<AiFeatureSheetProps> = ({
         expiresAt: res?.expiresAt,
       });
     } catch (err) {
-      if (err instanceof ApiError && err.code === 'PRO_REQUIRED') {
+      if (!isVip && err instanceof ApiError && err.code === 'PRO_REQUIRED') {
         onClose();
         onUpgradeRequired();
         return;
@@ -196,7 +200,7 @@ export const AiFeatureSheet: React.FC<AiFeatureSheetProps> = ({
       const res = await decodeWhaleWallet(token, target);
       setWhaleResult(res);
     } catch (err) {
-      if (err instanceof ApiError && err.code === 'PRO_REQUIRED') {
+      if (!isVip && err instanceof ApiError && err.code === 'PRO_REQUIRED') {
         onClose();
         onUpgradeRequired();
         return;
@@ -233,7 +237,7 @@ export const AiFeatureSheet: React.FC<AiFeatureSheetProps> = ({
       };
       setCoachMessages((prev) => [...prev, aiMsg]);
     } catch (err) {
-      if (err instanceof ApiError && err.code === 'PRO_REQUIRED') {
+      if (!isVip && err instanceof ApiError && err.code === 'PRO_REQUIRED') {
         onClose();
         onUpgradeRequired();
         return;

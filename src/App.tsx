@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { User } from '@supabase/supabase-js';
 import {
   Activity,
   ArrowDownLeft,
@@ -34,7 +35,9 @@ import {
   fetchSolHistory,
   upgradeTier,
 } from './lib/api';
+import { clearUserSession, loadUserSession, saveUserSession } from './lib/sessionStorage';
 import { isSupabaseConfigured, supabase } from './lib/supabase';
+import { applyVipSuperOverride, isVipSuperEmail } from './lib/vip';
 import type { SolPriceHistory, SubscriptionTier, UserProfile, WalletAnalysis } from './types';
 
 const QUICK_TEST_WALLETS = [
@@ -42,59 +45,33 @@ const QUICK_TEST_WALLETS = [
   { label: 'Treasury Wallet', address: '5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1' },
 ];
 
-const AUTH_TOKEN_STORAGE_KEY = 'solidusx_session_token_v1';
-const AUTH_PROFILE_STORAGE_KEY = 'solidusx_session_profile_v1';
-
-function normalizeLifetimeSuperProfile(profile: UserProfile): UserProfile {
-  if (profile.email.trim().toLowerCase() === 'sunilkuri804@gmail.com') {
-    return {
-      ...profile,
-      tier: 'Super',
-      dailyLimit: null,
-      maxAdScansPerDay: 0,
-    };
-  }
-  return profile;
-}
-
-function savePersistedSession(token: string, profile: UserProfile): void {
-  try {
-    const normalized = normalizeLifetimeSuperProfile(profile);
-    window.localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, token);
-    window.localStorage.setItem(AUTH_PROFILE_STORAGE_KEY, JSON.stringify(normalized));
-  } catch {
-    // Ignore storage quota errors
-  }
-}
-
-function loadPersistedSession(): { token: string; profile: UserProfile | null } | null {
-  try {
-    const savedToken = window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
-    if (!savedToken) return null;
-    const rawProfile = window.localStorage.getItem(AUTH_PROFILE_STORAGE_KEY);
-    const parsedProfile = rawProfile
-      ? normalizeLifetimeSuperProfile(JSON.parse(rawProfile) as UserProfile)
-      : null;
-    return { token: savedToken, profile: parsedProfile };
-  } catch {
-    return null;
-  }
-}
-
-function clearPersistedSession(): void {
-  try {
-    window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
-    window.localStorage.removeItem(AUTH_PROFILE_STORAGE_KEY);
-  } catch {
-    // Ignore
-  }
+function buildFallbackOAuthProfile(sbUser: User): UserProfile {
+  const email = sbUser.email || '';
+  const metaTier = sbUser.user_metadata?.tier;
+  const baseTier: SubscriptionTier =
+    metaTier === 'Pro' || metaTier === 'Super' ? metaTier : 'Free';
+  return applyVipSuperOverride({
+    id: sbUser.id,
+    email,
+    tier: baseTier,
+    dailyChecks: Number(sbUser.user_metadata?.daily_checks ?? 0),
+    dailyLimit: baseTier === 'Super' ? null : baseTier === 'Pro' ? 50 : 1,
+    bonusChecks: Number(sbUser.user_metadata?.bonus_checks ?? 0),
+    adScansToday: Number(sbUser.user_metadata?.ad_scans_today ?? 0),
+    maxAdScansPerDay: baseTier === 'Free' ? 2 : 0,
+    lastCheckDate: new Date().toISOString().slice(0, 10),
+    authProvider: sbUser.app_metadata?.provider === 'google' ? 'google' : 'supabase',
+    createdAt: sbUser.created_at || new Date().toISOString(),
+  });
 }
 
 export default function App() {
-  const [authInitializing, setAuthInitializing] = useState(true);
-  const [token, setToken] = useState<string | null>(null);
-  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [initialSession] = useState(() => loadUserSession());
+  const [authInitializing, setAuthInitializing] = useState(() => !initialSession);
+  const [token, setToken] = useState<string | null>(() => initialSession?.token ?? null);
+  const [profile, setProfile] = useState<UserProfile | null>(() => initialSession?.profile ?? null);
   const [activeTab, setActiveTab] = useState<AppTab>('analyzer');
+  const explicitSignOutRef = useRef(false);
 
   const [walletInput, setWalletInput] = useState('');
   const [analysis, setAnalysis] = useState<WalletAnalysis | null>(null);
@@ -135,83 +112,101 @@ export default function App() {
     };
   }, []);
 
-  // Keep persisted session cache in sync when tier or daily checks update
+  // Keep solidusx_user_session in sync when tier or daily checks update
   useEffect(() => {
     if (token && profile) {
-      savePersistedSession(token, profile);
+      saveUserSession(token, profile);
     }
   }, [token, profile]);
 
-  // Check Supabase session and subscribe to auth state changes before rendering login screen
+  // Check Supabase OAuth / persisted session & subscribe to auth state changes
   useEffect(() => {
     let mounted = true;
 
     const { data: sub } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (!mounted) return;
       if (event === 'SIGNED_OUT') {
-        clearPersistedSession();
-        setToken(null);
-        setProfile(null);
+        if (explicitSignOutRef.current) {
+          clearUserSession();
+          setToken(null);
+          setProfile(null);
+        }
         setAuthInitializing(false);
         return;
       }
 
       const accessToken = session?.access_token;
-      if (accessToken && isSupabaseConfigured) {
-        try {
-          const { profile: fetched } = await fetchProfile(accessToken);
-          if (!mounted) return;
-          savePersistedSession(accessToken, fetched);
-          setToken(accessToken);
-          setProfile(fetched);
-        } catch {
-          // Non-blocking; restoreSession handles fallback
-        } finally {
-          if (mounted) setAuthInitializing(false);
+      if (accessToken && session?.user) {
+        explicitSignOutRef.current = false;
+        const immediateProfile = buildFallbackOAuthProfile(session.user);
+        saveUserSession(accessToken, immediateProfile);
+        setToken(accessToken);
+        setProfile(immediateProfile);
+        setAuthInitializing(false);
+
+        if (isSupabaseConfigured) {
+          try {
+            const { profile: fetched } = await fetchProfile(accessToken);
+            if (!mounted) return;
+            const normalized = applyVipSuperOverride(fetched);
+            saveUserSession(accessToken, normalized);
+            setProfile(normalized);
+          } catch {
+            // Keep the persisted OAuth session even if /api or profile table fetch fails
+          }
         }
       }
     });
 
-    const restoreSession = async () => {
+    const syncSessionOnStartup = async () => {
       try {
         const { data } = await supabase.auth.getSession();
         const accessToken = data.session?.access_token;
 
-        if (accessToken && isSupabaseConfigured) {
-          const { profile: fetched } = await fetchProfile(accessToken);
+        if (accessToken && data.session?.user) {
+          explicitSignOutRef.current = false;
+          const immediateProfile = buildFallbackOAuthProfile(data.session.user);
           if (!mounted) return;
-          savePersistedSession(accessToken, fetched);
+          saveUserSession(accessToken, immediateProfile);
           setToken(accessToken);
-          setProfile(fetched);
+          setProfile(immediateProfile);
+
+          if (isSupabaseConfigured) {
+            try {
+              const { profile: fetched } = await fetchProfile(accessToken);
+              if (!mounted) return;
+              const normalized = applyVipSuperOverride(fetched);
+              saveUserSession(accessToken, normalized);
+              setProfile(normalized);
+            } catch {
+              // Keep existing session on network or /api failure
+            }
+          }
           return;
         }
 
-        const saved = loadPersistedSession();
+        // Background-refresh existing localStorage session without ever clearing it if /api fails
+        const saved = loadUserSession();
         if (saved?.token) {
           try {
             const { profile: fetched } = await fetchProfile(saved.token);
             if (!mounted) return;
-            savePersistedSession(saved.token, fetched);
+            const normalized = applyVipSuperOverride(fetched);
+            saveUserSession(saved.token, normalized);
             setToken(saved.token);
-            setProfile(fetched);
-          } catch (err) {
-            if (!mounted) return;
-            if (err instanceof ApiError && err.status === 401) {
-              clearPersistedSession();
-            } else if (saved.profile) {
-              setToken(saved.token);
-              setProfile(saved.profile);
-            }
+            setProfile(normalized);
+          } catch {
+            // NEVER clear session on page reload if /api/* fails (e.g. 404/401/offline on Vercel)
           }
         }
       } catch {
-        // Ignore session check failure and show login screen cleanly
+        // Ignore transient startup check errors; keep restored session if present
       } finally {
         if (mounted) setAuthInitializing(false);
       }
     };
 
-    void restoreSession();
+    void syncSessionOnStartup();
 
     return () => {
       mounted = false;
@@ -220,15 +215,18 @@ export default function App() {
   }, []);
 
   const handleAuthenticated = useCallback((newToken: string, newProfile: UserProfile) => {
-    savePersistedSession(newToken, newProfile);
+    explicitSignOutRef.current = false;
+    const normalized = applyVipSuperOverride(newProfile);
+    saveUserSession(newToken, normalized);
     setToken(newToken);
-    setProfile(newProfile);
+    setProfile(normalized);
     setActiveTab('analyzer');
     setAuthInitializing(false);
   }, []);
 
   const handleSignOut = useCallback(async () => {
-    clearPersistedSession();
+    explicitSignOutRef.current = true;
+    clearUserSession();
     await supabase.auth.signOut().catch(() => {});
     setToken(null);
     setProfile(null);
@@ -239,8 +237,9 @@ export default function App() {
 
   const handleDeleteAccount = useCallback(async () => {
     if (!token) return;
+    explicitSignOutRef.current = true;
     await deleteAccount(token);
-    clearPersistedSession();
+    clearUserSession();
     await supabase.auth.signOut().catch(() => {});
     setToken(null);
     setProfile(null);
@@ -311,10 +310,13 @@ export default function App() {
     );
   }
 
+  const effectiveProfile = applyVipSuperOverride(profile);
+  const isVipOrPaid = isVipSuperEmail(effectiveProfile.email) || effectiveProfile.tier !== 'Free';
+
   return (
     <div className="min-h-screen bg-[#0A0B0E] text-[#F3F4F6] flex flex-col">
       <Header
-        profile={profile}
+        profile={effectiveProfile}
         activeTab={activeTab}
         onSelectTab={setActiveTab}
         onOpenUpgrade={() => setUpgradeOpen(true)}
@@ -417,12 +419,13 @@ export default function App() {
               onRequestBrowserPermission={requestBrowserPermission}
             />
 
-            {/* 4 AI Feature Cards (locked with Pro badge for Free users) */}
+            {/* 4 AI Feature Cards (locked with Pro badge for Free users; always unlocked for VIP/Pro/Super) */}
             <AiFeatureCards
-              isFreeTier={profile.tier === 'Free'}
+              isFreeTier={!isVipOrPaid}
+              userEmail={effectiveProfile.email}
               onUpgradeRequired={() => setUpgradeOpen(true)}
               onSelectFeature={(f) =>
-                profile.tier === 'Free' ? setUpgradeOpen(true) : setActiveAiFeature(f)
+                !isVipOrPaid ? setUpgradeOpen(true) : setActiveAiFeature(f)
               }
               hasScannedWallet={Boolean(analysis)}
               tradesCount={analysis?.tradesCount ?? 0}
@@ -501,8 +504,8 @@ export default function App() {
               </section>
             )}
 
-            {/* Free Plan Bottom Banner Ad (hidden for Pro and Super) */}
-            <FreeBannerAd profile={profile} onOpenUpgrade={() => setUpgradeOpen(true)} />
+            {/* Free Plan Bottom Banner Ad (hidden for VIP Super, Pro, and Super) */}
+            <FreeBannerAd profile={effectiveProfile} onOpenUpgrade={() => setUpgradeOpen(true)} />
           </>
         )}
 
@@ -514,7 +517,7 @@ export default function App() {
                   SolidusX AI Suite
                 </h1>
                 <p className="text-xs sm:text-sm text-zinc-400 mt-0.5">
-                  {profile.tier === 'Free'
+                  {!isVipOrPaid
                     ? 'Upgrade to Pro or Super to unlock all 4 Gemini AI trading tools.'
                     : analysis
                       ? `Active context: ${analysis.walletAddress.slice(0, 6)}…${analysis.walletAddress.slice(-4)} (${analysis.tradesCount} trades, $${analysis.totalNetPnlUsd.toFixed(2)} PnL)`
@@ -531,22 +534,23 @@ export default function App() {
             </div>
 
             <AiFeatureCards
-              isFreeTier={profile.tier === 'Free'}
+              isFreeTier={!isVipOrPaid}
+              userEmail={effectiveProfile.email}
               onUpgradeRequired={() => setUpgradeOpen(true)}
               onSelectFeature={(f) =>
-                profile.tier === 'Free' ? setUpgradeOpen(true) : setActiveAiFeature(f)
+                !isVipOrPaid ? setUpgradeOpen(true) : setActiveAiFeature(f)
               }
               hasScannedWallet={Boolean(analysis)}
               tradesCount={analysis?.tradesCount ?? 0}
             />
 
-            <FreeBannerAd profile={profile} onOpenUpgrade={() => setUpgradeOpen(true)} />
+            <FreeBannerAd profile={effectiveProfile} onOpenUpgrade={() => setUpgradeOpen(true)} />
           </div>
         )}
 
         {activeTab === 'settings' && (
           <SettingsView
-            profile={profile}
+            profile={effectiveProfile}
             onOpenUpgrade={() => setUpgradeOpen(true)}
             onSignOut={handleSignOut}
             onDeleteAccount={handleDeleteAccount}
@@ -588,6 +592,7 @@ export default function App() {
       <AiFeatureSheet
         feature={activeAiFeature}
         token={token}
+        userEmail={effectiveProfile.email}
         walletContext={analysis}
         onClose={() => setActiveAiFeature(null)}
         onUpgradeRequired={() => setUpgradeOpen(true)}
@@ -596,7 +601,7 @@ export default function App() {
       <UpgradeModal
         open={upgradeOpen}
         token={token}
-        currentTier={profile.tier}
+        currentTier={effectiveProfile.tier}
         onClose={() => setUpgradeOpen(false)}
         onSelectFreeTier={() => handleUpgradeTier('Free')}
         onPaymentActivated={(updatedProfile) => setProfile(updatedProfile)}

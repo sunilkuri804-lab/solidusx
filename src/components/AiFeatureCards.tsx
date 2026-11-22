@@ -1,5 +1,6 @@
 import React from 'react';
 import { ArrowUpRight, Clock, Flame, Lock, MessageSquare, Radar } from 'lucide-react';
+import { isVipSuperEmail } from '../lib/vip';
 
 export type AiFeatureType = 'roast' | 'what-if' | 'whale' | 'coach';
 
@@ -7,6 +8,7 @@ interface AiFeatureCardsProps {
   onSelectFeature: (feature: AiFeatureType) => void;
   onUpgradeRequired: () => void;
   isFreeTier: boolean;
+  userEmail?: string;
   hasScannedWallet: boolean;
   tradesCount: number;
 }
@@ -52,9 +54,11 @@ export const AiFeatureCards: React.FC<AiFeatureCardsProps> = ({
   onSelectFeature,
   onUpgradeRequired,
   isFreeTier,
+  userEmail,
   hasScannedWallet,
   tradesCount,
 }) => {
+  const lockedForUser = isFreeTier && !isVipSuperEmail(userEmail);
   return (
     <section aria-labelledby="ai-suite-heading" className="space-y-3">
       <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-1">
@@ -66,7 +70,7 @@ export const AiFeatureCards: React.FC<AiFeatureCardsProps> = ({
             AI Trading Intelligence
           </h2>
           <p className="text-xs sm:text-sm text-zinc-400">
-            {isFreeTier
+            {lockedForUser
               ? 'Upgrade to Pro or Super to unlock all 4 Gemini AI trading tools.'
               : hasScannedWallet
                 ? `Synced to scanned wallet (${tradesCount} trades) · 10-minute response cache active`
@@ -82,12 +86,12 @@ export const AiFeatureCards: React.FC<AiFeatureCardsProps> = ({
             <button
               key={feat.id}
               type="button"
-              onClick={() => (isFreeTier ? onUpgradeRequired() : onSelectFeature(feat.id))}
+              onClick={() => (lockedForUser ? onUpgradeRequired() : onSelectFeature(feat.id))}
               aria-label={
-                isFreeTier ? `${feat.title} — Pro plan required to unlock` : feat.title
+                lockedForUser ? `${feat.title} — Pro plan required to unlock` : feat.title
               }
               className={`group text-left bg-[#13151B] hover:bg-[#171A22] border rounded-2xl p-4 sm:p-5 flex flex-col justify-between gap-4 min-h-[154px] transition-all active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#14F195] ${
-                isFreeTier
+                lockedForUser
                   ? 'border-white/[0.07] hover:border-white/[0.16]'
                   : 'border-white/[0.07] hover:border-[#14F195]/40'
               }`}
@@ -96,7 +100,7 @@ export const AiFeatureCards: React.FC<AiFeatureCardsProps> = ({
                 <div className="flex items-center justify-between gap-2">
                   <div
                     className={`w-9 h-9 rounded-xl flex items-center justify-center ${
-                      isFreeTier
+                      lockedForUser
                         ? 'bg-white/[0.05] border border-white/[0.08] text-zinc-400'
                         : 'bg-[#14F195]/10 border border-[#14F195]/20 text-[#14F195]'
                     }`}
@@ -104,7 +108,7 @@ export const AiFeatureCards: React.FC<AiFeatureCardsProps> = ({
                     <Icon className="w-4 h-4" />
                   </div>
 
-                  {isFreeTier && (
+                  {lockedForUser && (
                     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/[0.06] border border-white/[0.12] text-[11px] font-semibold text-zinc-200 whitespace-nowrap shrink-0">
                       <Lock className="w-3 h-3 text-[#14F195]" />
                       <span>Pro Feature</span>
@@ -122,11 +126,11 @@ export const AiFeatureCards: React.FC<AiFeatureCardsProps> = ({
 
               <div
                 className={`flex items-center justify-between text-xs font-medium pt-1 border-t border-white/[0.05] ${
-                  isFreeTier ? 'text-zinc-300 group-hover:text-[#14F195]' : 'text-[#14F195]'
+                  lockedForUser ? 'text-zinc-300 group-hover:text-[#14F195]' : 'text-[#14F195]'
                 }`}
               >
-                <span>{isFreeTier ? 'Upgrade to Unlock' : feat.actionLabel}</span>
-                {isFreeTier ? (
+                <span>{lockedForUser ? 'Upgrade to Unlock' : feat.actionLabel}</span>
+                {lockedForUser ? (
                   <Lock className="w-3.5 h-3.5" />
                 ) : (
                   <ArrowUpRight className="w-3.5 h-3.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />

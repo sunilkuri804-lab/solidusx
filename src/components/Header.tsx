@@ -1,5 +1,6 @@
 import React from 'react';
 import { Zap } from 'lucide-react';
+import { isVipSuperEmail } from '../lib/vip';
 import type { UserProfile } from '../types';
 
 export type AppTab = 'analyzer' | 'ai-suite' | 'settings';
@@ -17,8 +18,10 @@ export const Header: React.FC<HeaderProps> = ({
   onSelectTab,
   onOpenUpgrade,
 }) => {
+  const isVip = isVipSuperEmail(profile.email);
+  const effectiveTier = isVip ? 'Super' : profile.tier;
   const remainingLabel =
-    profile.dailyLimit === null
+    isVip || profile.dailyLimit === null
       ? 'Unlimited'
       : `${Math.max(0, profile.dailyLimit - profile.dailyChecks) + profile.bonusChecks} left`;
 
@@ -71,14 +74,14 @@ export const Header: React.FC<HeaderProps> = ({
           <div className="flex items-center gap-1.5 text-xs whitespace-nowrap shrink-0">
             <span
               className={`font-semibold ${
-                profile.tier === 'Super'
+                effectiveTier === 'Super'
                   ? 'text-[#14F195]'
-                  : profile.tier === 'Pro'
+                  : effectiveTier === 'Pro'
                     ? 'text-emerald-300'
                     : 'text-zinc-300'
               }`}
             >
-              {profile.tier}
+              {effectiveTier}
             </span>
             <span className="text-zinc-600 hidden xs:inline" aria-hidden="true">
               ·
@@ -93,7 +96,7 @@ export const Header: React.FC<HeaderProps> = ({
             onClick={onOpenUpgrade}
             className="min-h-[36px] px-3.5 py-1.5 rounded-xl bg-[#14F195] hover:bg-[#11d984] active:scale-[0.98] text-[#0A0B0E] text-xs font-semibold whitespace-nowrap shrink-0 transition-all"
           >
-            {profile.tier === 'Super' ? 'Manage Plan' : 'Upgrade'}
+            {effectiveTier === 'Super' ? 'Manage Plan' : 'Upgrade'}
           </button>
         </div>
       </div>

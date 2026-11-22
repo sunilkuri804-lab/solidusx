@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { AlertTriangle, Check, LogOut, ShieldCheck, Trash2, Zap } from 'lucide-react';
+import { isVipSuperEmail } from '../lib/vip';
 import type { UserProfile } from '../types';
 import { PWAInstallButton } from './PWAInstallButton';
 
@@ -20,6 +21,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
+  const isVip = isVipSuperEmail(profile.email);
+  const effectiveTier = isVip ? 'Super' : profile.tier;
+
   const handleConfirmDelete = async () => {
     setDeleteError(null);
     setDeleting(true);
@@ -32,7 +36,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   };
 
   const quotaText =
-    profile.dailyLimit === null
+    isVip || profile.dailyLimit === null
       ? 'Unlimited daily scans'
       : `${profile.dailyChecks} / ${profile.dailyLimit} daily scans used${
           profile.bonusChecks > 0 ? ` (+${profile.bonusChecks} ad bonus)` : ''
@@ -69,7 +73,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             <div className="flex items-center gap-2 mt-1">
               <Zap className="w-4 h-4 text-[#14F195]" />
               <span className="font-display text-base font-semibold text-white">
-                {profile.tier} Plan
+                {effectiveTier} Plan
               </span>
               <span className="text-xs text-zinc-500" aria-hidden="true">
                 ·
@@ -83,7 +87,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             onClick={onOpenUpgrade}
             className="min-h-[44px] px-4 py-2 rounded-xl bg-[#14F195] hover:bg-[#11d984] text-[#0A0B0E] text-xs font-semibold whitespace-nowrap shrink-0 transition-colors"
           >
-            {profile.tier === 'Super' ? 'View Plans' : 'Upgrade Plan'}
+            {effectiveTier === 'Super' ? 'View Plans' : 'Upgrade Plan'}
           </button>
         </div>
 
@@ -95,7 +99,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               signing permissions.
             </div>
           </div>
-          {profile.tier !== 'Free' && (
+          {effectiveTier !== 'Free' && (
             <span className="inline-flex items-center gap-1 text-xs text-[#14F195] whitespace-nowrap shrink-0">
               <Check className="w-3.5 h-3.5" />
               <span>Ad-Free</span>

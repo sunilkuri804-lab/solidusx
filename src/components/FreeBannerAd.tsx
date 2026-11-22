@@ -1,5 +1,6 @@
 import React from 'react';
 import { Megaphone, ArrowUpRight } from 'lucide-react';
+import { isVipSuperEmail } from '../lib/vip';
 import type { UserProfile } from '../types';
 
 interface FreeBannerAdProps {
@@ -8,8 +9,8 @@ interface FreeBannerAdProps {
 }
 
 export const FreeBannerAd: React.FC<FreeBannerAdProps> = ({ profile, onOpenUpgrade }) => {
-  // Completely hide all ads for Pro and Super users
-  if (profile.tier !== 'Free') {
+  // Completely hide all ads for VIP Super email, Pro, and Super users
+  if (isVipSuperEmail(profile.email) || profile.tier !== 'Free') {
     return null;
   }
 

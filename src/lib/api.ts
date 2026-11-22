@@ -31,7 +31,9 @@ import {
   localSignUp,
   localUpdateTier,
 } from './localAuthStore';
+import { loadUserSession } from './sessionStorage';
 import { HELIUS_RPC_URL, isSupabaseConfigured } from './supabase';
+import { applyVipSuperOverride, isVipSuperEmail } from './vip';
 
 const MERCHANT_SOLANA_WALLET = '9XEcqn4CfftDGx3DJLdHgPc7KoF9YPUgeQvHaBztCEt2';
 const SOLANA_SIGNATURE_REGEX = /^[1-9A-HJ-NP-Za-km-z]{64,90}$/;
@@ -247,16 +249,19 @@ async function analyzeWalletBrowserFallback(walletAddress: string): Promise<Wall
 
 export async function signUpEmail(email: string, password: string) {
   if (isSupabaseConfigured) {
-    return signUpWithSupabase(email, password);
+    const res = await signUpWithSupabase(email, password);
+    return { token: res.token, profile: applyVipSuperOverride(res.profile) };
   }
   try {
-    return await requestJson<{ token: string; profile: UserProfile }>('/api/auth/signup', {
+    const res = await requestJson<{ token: string; profile: UserProfile }>('/api/auth/signup', {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     });
+    return { token: res.token, profile: applyVipSuperOverride(res.profile) };
   } catch (err) {
     if (err instanceof ApiError && err.status === 404) {
-      return localSignUp(email, password);
+      const res = await localSignUp(email, password);
+      return { token: res.token, profile: applyVipSuperOverride(res.profile) };
     }
     throw err;
   }
@@ -264,16 +269,19 @@ export async function signUpEmail(email: string, password: string) {
 
 export async function loginEmail(email: string, password: string) {
   if (isSupabaseConfigured) {
-    return loginWithSupabase(email, password);
+    const res = await loginWithSupabase(email, password);
+    return { token: res.token, profile: applyVipSuperOverride(res.profile) };
   }
   try {
-    return await requestJson<{ token: string; profile: UserProfile }>('/api/auth/login', {
+    const res = await requestJson<{ token: string; profile: UserProfile }>('/api/auth/login', {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     });
+    return { token: res.token, profile: applyVipSuperOverride(res.profile) };
   } catch (err) {
     if (err instanceof ApiError && err.status === 404) {
-      return localLogin(email, password);
+      const res = await localLogin(email, password);
+      return { token: res.token, profile: applyVipSuperOverride(res.profile) };
     }
     throw err;
   }
@@ -282,14 +290,15 @@ export async function loginEmail(email: string, password: string) {
 export async function fetchProfile(token: string) {
   if (isSupabaseConfigured) {
     const res = await getSupabaseUserProfile();
-    return { profile: res.profile };
+    return { profile: applyVipSuperOverride(res.profile) };
   }
   if (token.startsWith('local.')) {
-    const profile = localGetProfile(token);
+    const profile = localGetProfile(token) || loadUserSession()?.profile || null;
     if (!profile) throw new ApiError('Session expired.', 401);
-    return { profile };
+    return { profile: applyVipSuperOverride(profile) };
   }
-  return requestJson<{ profile: UserProfile }>('/api/auth/me', { method: 'GET' }, token);
+  const res = await requestJson<{ profile: UserProfile }>('/api/auth/me', { method: 'GET' }, token);
+  return { profile: applyVipSuperOverride(res.profile) };
 }
 
 export async function upgradeTier(token: string, tier: SubscriptionTier) {
@@ -302,7 +311,7 @@ export async function upgradeTier(token: string, tier: SubscriptionTier) {
       );
     }
     const profile = await updateSupabaseTier('Free');
-    return { profile };
+    return { profile: applyVipSuperOverride(profile) };
   }
   if (token.startsWith('local.')) {
     if (tier !== 'Free') {
@@ -312,9 +321,9 @@ export async function upgradeTier(token: string, tier: SubscriptionTier) {
         'PAYMENT_REQUIRED'
       );
     }
-    return { profile: localUpdateTier(token, 'Free') };
+    return { profile: applyVipSuperOverride(localUpdateTier(token, 'Free')) };
   }
-  return requestJson<{ profile: UserProfile }>(
+  const res = await requestJson<{ profile: UserProfile }>(
     '/api/auth/upgrade',
     {
       method: 'POST',
@@ -322,13 +331,14 @@ export async function upgradeTier(token: string, tier: SubscriptionTier) {
     },
     token
   );
+  return { profile: applyVipSuperOverride(res.profile) };
 }
 
 export async function claimRewardedAdScan(token: string) {
   if (isSupabaseConfigured) {
     try {
       const profile = await claimSupabaseRewardedAd();
-      return { profile };
+      return { profile: applyVipSuperOverride(profile) };
     } catch (err) {
       const e = err as Error & { code?: string; profile?: UserProfile };
       throw new ApiError(e.message, e.code === 'AD_LIMIT_REACHED' ? 403 : 400, e.code, e.profile);
@@ -336,17 +346,18 @@ export async function claimRewardedAdScan(token: string) {
   }
   if (token.startsWith('local.')) {
     try {
-      return { profile: localClaimRewardAd(token) };
+      return { profile: applyVipSuperOverride(localClaimRewardAd(token)) };
     } catch (err) {
       const e = err as Error & { code?: string; profile?: UserProfile };
       throw new ApiError(e.message, e.code === 'AD_LIMIT_REACHED' ? 403 : 400, e.code, e.profile);
     }
   }
-  return requestJson<{ profile: UserProfile }>(
+  const res = await requestJson<{ profile: UserProfile }>(
     '/api/auth/reward-ad',
     { method: 'POST' },
     token
   );
+  return { profile: applyVipSuperOverride(res.profile) };
 }
 
 export async function deleteAccount(token: string) {
@@ -365,18 +376,23 @@ export async function deleteAccount(token: string) {
 
 export async function analyzeWallet(token: string, walletAddress: string) {
   const cleaned = walletAddress.trim();
+  const cachedSession = loadUserSession();
 
   if (isSupabaseConfigured || token.startsWith('local.')) {
-    const currentProfile = isSupabaseConfigured
+    const rawProfile = isSupabaseConfigured
       ? (await getSupabaseUserProfile()).profile
-      : localGetProfile(token);
+      : localGetProfile(token) || cachedSession?.profile || null;
 
-    if (!currentProfile) {
+    if (!rawProfile) {
       throw new ApiError('Session expired. Please sign in again.', 401);
     }
 
+    const currentProfile = applyVipSuperOverride(rawProfile);
+    const isVip = isVipSuperEmail(currentProfile.email);
     const hasDaily =
-      currentProfile.dailyLimit === null || currentProfile.dailyChecks < currentProfile.dailyLimit;
+      isVip ||
+      currentProfile.dailyLimit === null ||
+      currentProfile.dailyChecks < currentProfile.dailyLimit;
     const hasBonus = currentProfile.bonusChecks > 0;
 
     if (!hasDaily && !hasBonus) {
@@ -415,55 +431,178 @@ export async function analyzeWallet(token: string, walletAddress: string) {
       !analysis.isEmpty && analysis.tradesCount > 0
         ? isSupabaseConfigured
           ? await consumeSupabaseScanCredit()
-          : localConsumeScan(token)
+          : localGetProfile(token)
+            ? localConsumeScan(token)
+            : currentProfile
         : currentProfile;
 
-    return { analysis, profile: updatedProfile };
+    return { analysis, profile: applyVipSuperOverride(updatedProfile) };
   }
 
-  return requestJson<{ analysis: WalletAnalysis; profile: UserProfile }>(
-    '/api/solana/analyze',
-    {
-      method: 'POST',
-      body: JSON.stringify({ walletAddress: cleaned }),
-    },
-    token
-  );
+  try {
+    const res = await requestJson<{ analysis: WalletAnalysis; profile: UserProfile }>(
+      '/api/solana/analyze',
+      {
+        method: 'POST',
+        body: JSON.stringify({ walletAddress: cleaned }),
+      },
+      token
+    );
+    return { analysis: res.analysis, profile: applyVipSuperOverride(res.profile) };
+  } catch (err) {
+    if (err instanceof ApiError && (err.status === 404 || err.status === 401) && cachedSession?.profile) {
+      const analysis = await analyzeWalletBrowserFallback(cleaned);
+      return { analysis, profile: applyVipSuperOverride(cachedSession.profile) };
+    }
+    throw err;
+  }
 }
 
 // --- 4 AI Tools ---
 
+function canUseLocalAiFallback(token: string, err: unknown): boolean {
+  const session = loadUserSession();
+  const isVip = isVipSuperEmail(session?.profile?.email);
+  const isPaidSession = Boolean(session?.profile && session.profile.tier !== 'Free');
+  if (!isVip && !isPaidSession && !token.startsWith('local.')) return false;
+  if (err instanceof ApiError) {
+    return err.status === 404 || err.status === 401 || (isVip && err.code === 'PRO_REQUIRED');
+  }
+  return isVip;
+}
+
+function buildWalletSummaryStats(walletContext: WalletAnalysis | null) {
+  const trades = walletContext?.tradesCount ?? 0;
+  const winRate = walletContext?.winRate ?? 0;
+  const pnlUsd = walletContext?.totalNetPnlUsd ?? 0;
+  const gasUsd = walletContext?.totalGasFeesUsd ?? 0;
+  const solBal = walletContext?.solBalance ?? 0;
+  const topTokens = walletContext?.topTokens?.map((t) => t.symbol).filter(Boolean) || [];
+  return { trades, winRate, pnlUsd, gasUsd, solBal, topTokens };
+}
+
 export async function generateRoast(token: string, walletContext: WalletAnalysis | null) {
-  return requestJson<RoastResult>(
-    '/api/ai/roast',
-    {
-      method: 'POST',
-      body: JSON.stringify({ walletContext }),
-    },
-    token
-  );
+  try {
+    return await requestJson<RoastResult>(
+      '/api/ai/roast',
+      {
+        method: 'POST',
+        body: JSON.stringify({ walletContext }),
+      },
+      token
+    );
+  } catch (err) {
+    if (!canUseLocalAiFallback(token, err)) throw err;
+    const { trades, winRate, pnlUsd, gasUsd, solBal, topTokens } =
+      buildWalletSummaryStats(walletContext);
+    return {
+      roastTitle: trades === 0 ? 'Frozen on the Sidelines' : 'On-Chain Reality Check',
+      lines:
+        trades === 0
+          ? [
+              `Holding ${solBal.toFixed(3)} SOL with zero recent trades is peak spectator energy.`,
+              'While memecoins doubled and halved, this wallet stayed cleaner than a hardware safe.',
+              'At least you saved $0.00 in failed slippage fees while everyone else paid validators.',
+              'Scan an active trading wallet or deploy small size before the next cycle passes you by.',
+            ]
+          : [
+              `${trades} transactions executed for $${pnlUsd.toFixed(2)} net PnL (${winRate.toFixed(1)}% win rate) — busy hands, sharp lessons.`,
+              `Validators collected $${gasUsd.toFixed(2)} in fees while you rotated through ${topTokens.slice(0, 3).join(', ') || 'Solana pairs'}.`,
+              winRate >= 55
+                ? 'Your win rate clears average retail noise, though position sizing decides whether winners carry.'
+                : 'Chasing fast entries trimmed your edge — fewer, higher-conviction setups protect capital.',
+              `Current ${solBal.toFixed(3)} SOL buffer gives you room to trade deliberately rather than over-trading.`,
+            ],
+      verdict:
+        trades === 0
+          ? 'Zero gas burned, zero stress — now pick high-liquidity entries with clear invalidation.'
+          : 'Cut low-conviction churn and let your best Solana setups compound.',
+      cached: false,
+    } satisfies RoastResult;
+  }
 }
 
 export async function generateWhatIf(token: string, walletContext: WalletAnalysis | null) {
-  return requestJson<WhatIfResult>(
-    '/api/ai/what-if',
-    {
-      method: 'POST',
-      body: JSON.stringify({ walletContext }),
-    },
-    token
-  );
+  try {
+    return await requestJson<WhatIfResult>(
+      '/api/ai/what-if',
+      {
+        method: 'POST',
+        body: JSON.stringify({ walletContext }),
+      },
+      token
+    );
+  } catch (err) {
+    if (!canUseLocalAiFallback(token, err)) throw err;
+    const { trades, pnlUsd, solBal, topTokens } = buildWalletSummaryStats(walletContext);
+    const baseCapital = Math.max(250, Math.abs(pnlUsd) + solBal * 185);
+    const leadToken = topTokens[0] || 'SOL';
+    const secondToken = topTokens[1] || 'JUP';
+    const missedA = Math.round(baseCapital * 0.42);
+    const missedB = Math.round(baseCapital * 0.24);
+    return {
+      summary:
+        trades === 0
+          ? 'Simulated disciplined accumulation across liquid Solana leaders over recent swing windows.'
+          : `Holding core winners longer across ${leadToken} and ${secondToken} could have reduced rotation drag.`,
+      totalMissedUsd: missedA + missedB,
+      scenarios: [
+        {
+          token: leadToken,
+          action: trades === 0 ? 'Staged Spot Entry' : 'Scaled Out Early',
+          actualOutcome: `$${pnlUsd.toFixed(0)} realized`,
+          simulatedOutcome: `+$${missedA} with 7d swing hold`,
+          missedGainUsd: missedA,
+        },
+        {
+          token: secondToken,
+          action: 'Rapid Rotation',
+          actualOutcome: 'Flat after fees',
+          simulatedOutcome: `+$${missedB} waiting for trend confirmation`,
+          missedGainUsd: missedB,
+        },
+      ],
+      cached: false,
+    } satisfies WhatIfResult;
+  }
 }
 
 export async function decodeWhaleWallet(token: string, targetWalletAddress: string) {
-  return requestJson<WhaleDecodeResult>(
-    '/api/ai/whale-decode',
-    {
-      method: 'POST',
-      body: JSON.stringify({ targetWalletAddress: targetWalletAddress.trim() }),
-    },
-    token
-  );
+  const cleaned = targetWalletAddress.trim();
+  try {
+    return await requestJson<WhaleDecodeResult>(
+      '/api/ai/whale-decode',
+      {
+        method: 'POST',
+        body: JSON.stringify({ targetWalletAddress: cleaned }),
+      },
+      token
+    );
+  } catch (err) {
+    if (!canUseLocalAiFallback(token, err)) throw err;
+    const whale = await analyzeWalletBrowserFallback(cleaned);
+    const score = Math.min(96, Math.max(35, Math.round(whale.winRate * 0.7 + (whale.tradesCount > 10 ? 25 : 10))));
+    return {
+      walletAddress: cleaned,
+      archetype: whale.solBalance > 50 ? 'High-Liquidity Solana Whale' : 'Active On-Chain Rotator',
+      convictionScore: score,
+      entryStyle: `${whale.tradesCount} recent on-chain actions clustered around liquid DEX pools.`,
+      exitDiscipline:
+        whale.winRate >= 55
+          ? 'Consistent positive completion rate with controlled failed-tx drag.'
+          : 'Frequent rapid rotations; watch confirmation before shadowing entries.',
+      riskProfile: `Holding ${whale.solBalance.toFixed(2)} SOL with $${whale.totalGasFeesUsd.toFixed(2)} observed gas footprint.`,
+      actionableTakeaway:
+        'Mirror only high-liquidity spot entries after confirming sustained volume rather than chasing first-block spikes.',
+      metrics: {
+        tradesCount: whale.tradesCount,
+        winRate: whale.winRate,
+        totalNetPnlUsd: whale.totalNetPnlUsd,
+        solBalance: whale.solBalance,
+      },
+      cached: false,
+    } satisfies WhaleDecodeResult;
+  }
 }
 
 export async function sendCoachMessage(
@@ -472,18 +611,35 @@ export async function sendCoachMessage(
   messages: CoachMessage[],
   message: string
 ) {
-  return requestJson<{ reply: string; cached?: boolean; expiresAt?: number }>(
-    '/api/ai/coach',
-    {
-      method: 'POST',
-      body: JSON.stringify({
-        walletContext,
-        messages: messages.map((m) => ({ role: m.role, content: m.content })),
-        message,
-      }),
-    },
-    token
-  );
+  try {
+    return await requestJson<{ reply: string; cached?: boolean; expiresAt?: number }>(
+      '/api/ai/coach',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          walletContext,
+          messages: messages.map((m) => ({ role: m.role, content: m.content })),
+          message,
+        }),
+      },
+      token
+    );
+  } catch (err) {
+    if (!canUseLocalAiFallback(token, err)) throw err;
+    const { trades, winRate, pnlUsd, gasUsd, solBal, topTokens } =
+      buildWalletSummaryStats(walletContext);
+    const q = message.toLowerCase();
+    const reply = walletContext
+      ? `Based on your scanned wallet (${trades} trades, ${winRate.toFixed(1)}% win rate, $${pnlUsd.toFixed(2)} net PnL, $${gasUsd.toFixed(2)} gas, ${solBal.toFixed(3)} SOL${topTokens.length ? `, tokens: ${topTokens.slice(0, 3).join(', ')}` : ''}): ${
+          q.includes('gas') || q.includes('fee')
+            ? 'batch smaller rotations into higher-conviction entries to stop paying repeated priority fees on low-upside flips.'
+            : q.includes('size') || q.includes('risk')
+              ? 'cap any single altcoin position to 2–5% of liquid SOL value and pre-define your invalidation level before entering.'
+              : 'keep at least 30% in native SOL/USDC for asymmetric dips and avoid chasing green candles without volume confirmation.'
+        }`
+      : 'Scan any public Solana wallet above to anchor coaching to your real trade history. As a baseline rule: risk 1–2% per setup, avoid priority-fee overpaying during congestion, and scale out into strength.';
+    return { reply, cached: false };
+  }
 }
 
 // --- 7-Day SOL History & Live Token Prices ---
