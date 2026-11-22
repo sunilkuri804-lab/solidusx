@@ -9,6 +9,7 @@ import type {
   SolPriceHistory,
   SolPricePoint,
   SubscriptionTier,
+  TokenPriceQuote,
   TokenSummary,
   UserProfile,
   WalletAnalysis,
@@ -1108,6 +1109,81 @@ async function startServer(): Promise<void> {
   app.get('/api/solana/sol-history', async (_req, res) => {
     const history = await fetchSol7DayHistory();
     res.json(history);
+  });
+
+  app.get('/api/solana/token-prices', async (req, res) => {
+    const mintsParam = typeof req.query?.mints === 'string' ? req.query.mints : '';
+    const uniqueMints = Array.from(
+      new Set(
+        mintsParam
+          .split(',')
+          .map((m) => m.trim())
+          .filter((m) => BASE58_REGEX.test(m))
+      )
+    ).slice(0, 25);
+
+    if (uniqueMints.length === 0) {
+      res.status(400).json({ error: 'Provide at least one valid Solana token mint.' });
+      return;
+    }
+
+    const prices: Record<string, TokenPriceQuote> = {};
+    try {
+      const resp = await fetch(
+        `https://api.dexscreener.com/tokens/v1/solana/${uniqueMints.join(',')}`,
+        { signal: AbortSignal.timeout(6000) }
+      );
+      if (resp.ok) {
+        const pairs = (await resp.json()) as Array<{
+          baseToken?: { address?: string; symbol?: string };
+          priceUsd?: string;
+          priceChange?: { h24?: number };
+          liquidity?: { usd?: number };
+        }>;
+        if (Array.isArray(pairs)) {
+          const bestLiquidity = new Map<string, number>();
+          for (const pair of pairs) {
+            const addr = pair.baseToken?.address || '';
+            const price = Number(pair.priceUsd);
+            const liq = Number(pair.liquidity?.usd || 0);
+            if (!addr || !uniqueMints.includes(addr) || !(price > 0)) continue;
+            if (liq > (bestLiquidity.get(addr) ?? -1)) {
+              bestLiquidity.set(addr, liq);
+              prices[addr] = {
+                mint: addr,
+                symbol: pair.baseToken?.symbol || KNOWN_TOKENS[addr] || shortenMint(addr),
+                priceUsd: price,
+                change24hPct:
+                  typeof pair.priceChange?.h24 === 'number' ? pair.priceChange.h24 : null,
+              };
+            }
+          }
+        }
+      }
+    } catch {
+      // Fallback below
+    }
+
+    const SOL_MINT = 'So11111111111111111111111111111111111111112';
+    const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+    const USDT_MINT = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB';
+
+    if (uniqueMints.includes(SOL_MINT) && !prices[SOL_MINT]) {
+      prices[SOL_MINT] = {
+        mint: SOL_MINT,
+        symbol: 'SOL',
+        priceUsd: await fetchSolPriceUsd(),
+        change24hPct: null,
+      };
+    }
+    if (uniqueMints.includes(USDC_MINT) && !prices[USDC_MINT]) {
+      prices[USDC_MINT] = { mint: USDC_MINT, symbol: 'USDC', priceUsd: 1, change24hPct: 0 };
+    }
+    if (uniqueMints.includes(USDT_MINT) && !prices[USDT_MINT]) {
+      prices[USDT_MINT] = { mint: USDT_MINT, symbol: 'USDT', priceUsd: 1, change24hPct: 0 };
+    }
+
+    res.json({ prices });
   });
 
   // --- AUTH ROUTES ---

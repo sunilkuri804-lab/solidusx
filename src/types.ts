@@ -134,3 +134,32 @@ export interface SolanaPaymentVerificationResult {
   profile: UserProfile;
 }
 
+export interface TokenPriceQuote {
+  mint: string;
+  symbol: string;
+  priceUsd: number;
+  change24hPct: number | null;
+}
+
+export type TokenPriceAlertCondition = 'above' | 'below';
+
+export interface TokenPriceAlert {
+  id: string;
+  mint: string;
+  symbol: string;
+  condition: TokenPriceAlertCondition;
+  targetPriceUsd: number;
+  createdAt: string;
+  triggeredAt: string | null;
+  triggeredPriceUsd: number | null;
+}
+
+export interface TriggeredAlertNotification {
+  alertId: string;
+  mint: string;
+  symbol: string;
+  condition: TokenPriceAlertCondition;
+  targetPriceUsd: number;
+  livePriceUsd: number;
+  triggeredAt: string;
+}

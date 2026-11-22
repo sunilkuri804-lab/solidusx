@@ -7,7 +7,10 @@ export function isLiveSupabaseUrl(url: string): boolean {
   if (!url) return false;
   try {
     const parsed = new URL(url);
-    return parsed.hostname.endsWith('.supabase.co') && parsed.hostname.split('.').length >= 3;
+    if (parsed.hostname === 'supabase.co' || parsed.hostname === 'www.supabase.co') {
+      return false;
+    }
+    return parsed.protocol === 'https:' || parsed.hostname === 'localhost';
   } catch {
     return false;
   }

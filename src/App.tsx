@@ -3,10 +3,12 @@ import {
   Activity,
   ArrowDownLeft,
   ArrowUpRight,
+  BellRing,
   Search,
   Settings,
   Sparkles,
   Wallet,
+  X,
   Zap,
 } from 'lucide-react';
 import { AiFeatureCards, type AiFeatureType } from './components/AiFeatureCards';
@@ -20,7 +22,9 @@ import { PWAInstallButton } from './components/PWAInstallButton';
 import { ScanLimitModal } from './components/ScanLimitModal';
 import { SettingsView } from './components/SettingsView';
 import { SolPriceSparklineCard } from './components/SolPriceSparklineCard';
+import { TokenPriceAlerts } from './components/TokenPriceAlerts';
 import { UpgradeModal } from './components/UpgradeModal';
+import { usePriceAlerts } from './hooks/usePriceAlerts';
 import {
   ApiError,
   analyzeWallet,
@@ -52,6 +56,20 @@ export default function App() {
   const [activeAiFeature, setActiveAiFeature] = useState<AiFeatureType | null>(null);
   const [upgradeOpen, setUpgradeOpen] = useState(false);
   const [scanLimitOpen, setScanLimitOpen] = useState(false);
+
+  const {
+    alerts,
+    prices: tokenPrices,
+    refreshing: pricesRefreshing,
+    notifications: alertNotifications,
+    browserPermission,
+    refreshPrices,
+    addAlert,
+    removeAlert,
+    rearmAlert,
+    dismissNotification,
+    requestBrowserPermission,
+  } = usePriceAlerts(profile?.id ?? null, analysis);
 
   // Load 7-day SOL price trend for the dashboard sparkline
   useEffect(() => {
@@ -270,6 +288,20 @@ export default function App() {
             {/* 4 Core Wallet Metrics */}
             <MetricGrid analysis={analysis} loading={scanLoading} />
 
+            {/* Portfolio Token Holdings & Price Alerts */}
+            <TokenPriceAlerts
+              analysis={analysis}
+              alerts={alerts}
+              prices={tokenPrices}
+              refreshing={pricesRefreshing}
+              browserPermission={browserPermission}
+              onRefreshPrices={refreshPrices}
+              onAddAlert={addAlert}
+              onRemoveAlert={removeAlert}
+              onRearmAlert={rearmAlert}
+              onRequestBrowserPermission={requestBrowserPermission}
+            />
+
             {/* 4 AI Feature Cards (locked with Pro badge for Free users) */}
             <AiFeatureCards
               isFreeTier={profile.tier === 'Free'}
@@ -467,6 +499,55 @@ export default function App() {
       <div className="fixed bottom-16 right-4 md:bottom-5 md:right-5 z-40">
         <PWAInstallButton compact />
       </div>
+
+      {/* Live Triggered Price Alert Notifications */}
+      {alertNotifications.length > 0 && (
+        <div
+          aria-live="polite"
+          className="fixed top-[72px] right-4 left-4 sm:left-auto sm:w-96 z-50 space-y-2 pointer-events-none"
+        >
+          {alertNotifications.map((note) => (
+            <div
+              key={note.alertId}
+              role="status"
+              className="pointer-events-auto bg-[#13151B] border border-[#14F195]/45 rounded-2xl p-3.5 shadow-xl flex items-start justify-between gap-3"
+            >
+              <div className="flex items-start gap-2.5 min-w-0">
+                <div className="w-8 h-8 rounded-xl bg-[#14F195]/15 text-[#14F195] flex items-center justify-center shrink-0">
+                  <BellRing className="w-4 h-4" />
+                </div>
+                <div className="min-w-0">
+                  <div className="text-xs font-semibold text-white">
+                    Price Alert Triggered: {note.symbol}
+                  </div>
+                  <div className="font-mono tabular-nums text-[11px] text-zinc-300 mt-0.5">
+                    {note.condition === 'above' ? 'Crossed ≥' : 'Dropped ≤'} $
+                    {note.targetPriceUsd < 0.01
+                      ? note.targetPriceUsd.toFixed(6)
+                      : note.targetPriceUsd < 1
+                        ? note.targetPriceUsd.toFixed(4)
+                        : note.targetPriceUsd.toFixed(2)}{' '}
+                    · Live $
+                    {note.livePriceUsd < 0.01
+                      ? note.livePriceUsd.toFixed(6)
+                      : note.livePriceUsd < 1
+                        ? note.livePriceUsd.toFixed(4)
+                        : note.livePriceUsd.toFixed(2)}
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => dismissNotification(note.alertId)}
+                aria-label={`Dismiss ${note.symbol} alert notification`}
+                className="min-h-[32px] min-w-[32px] rounded-lg hover:bg-white/[0.08] text-zinc-400 hover:text-white flex items-center justify-center shrink-0"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
       <OfflineIndicator />
     </div>

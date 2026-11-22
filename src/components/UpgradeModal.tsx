@@ -12,7 +12,6 @@ import {
   Zap,
 } from 'lucide-react';
 import { fetchSolanaPaymentQuote, verifySolanaPayment } from '../lib/api';
-import { isSupabaseConfigured, supabase } from '../lib/supabase';
 import type { SolanaPaymentQuote, SubscriptionTier, UserProfile } from '../types';
 
 const MERCHANT_WALLET = '9XEcqn4CfftDGx3DJLdHgPc7KoF9YPUgeQvHaBztCEt2';
@@ -171,18 +170,6 @@ export const UpgradeModal: React.FC<UpgradeModalProps> = ({
         tier: checkoutPlan.tier,
         billing: checkoutPlan.billing,
       });
-
-      // Also sync active Supabase session user profile if configured client-side
-      if (isSupabaseConfigured && supabase) {
-        await supabase
-          .from('profiles')
-          .update({ tier: res.profile.tier, updated_at: new Date().toISOString() })
-          .eq('id', res.profile.id)
-          .then(() => undefined, () => undefined);
-        await supabase.auth
-          .updateUser({ data: { tier: res.profile.tier } })
-          .catch(() => undefined);
-      }
 
       onPaymentActivated(res.profile);
       setSuccessMsg(
