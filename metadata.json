@@ -1,0 +1,8 @@
+{
+  "name": "SolidusX AI",
+  "description": "Solana AI Portfolio & Trade Assistant with real-time Helius on-chain wallet analytics and Gemini AI trading intelligence.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
