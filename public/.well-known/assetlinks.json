@@ -1,0 +1,8 @@
+[{
+  "relation": ["delegate_permission/common.handle_all_urls"],
+  "target": {
+    "namespace": "android_app",
+    "package_name": "app.vercel.solidusx_phi.twa",
+    "sha256_cert_fingerprints": ["C0:71:D1:B8:87:24:AD:70:4E:A2:FC:21:01:11:1C:7:BE:A2:6A:B9:97:9C:B7:95"]
+  }
+}]
