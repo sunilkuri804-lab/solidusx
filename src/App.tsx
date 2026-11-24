@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { User } from '@supabase/supabase-js';
+import { Analytics } from '@vercel/analytics/react';
 import {
   Activity,
   ArrowDownLeft,
@@ -666,6 +667,7 @@ export default function App() {
       )}
 
       <OfflineIndicator />
+      <Analytics />
     </div>
   );
 }
